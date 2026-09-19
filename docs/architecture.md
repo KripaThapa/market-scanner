@@ -40,6 +40,11 @@ The live equity scanner previously filtered Alpaca/IEX data to 09:30–15:59 Ame
 
 ## API and deployment boundary
 
+The application repository builds and publishes three SHA-tagged GHCR images
+through GitHub Actions. The separate `homelab-k3s` repository owns Kubernetes
+manifests and manual Raspberry Pi deployment. No cluster deployment runs here.
+See [deployment](deployment.md) for release gates and handoff.
+
 Compose starts PostgreSQL, migration, public backend/frontend, private internal backend/Strategy Lab frontend, scanner, and research. Public frontend/backend and Strategy Lab bind to loopback. PostgreSQL, workers, and internal backend have no host ports. The public `backend.api:create_app` exposes sanitized scanner DTOs. `backend.internal_api:create_internal_app` contains private rules/research/replay/source-status/upload routes and is reachable only through the local private frontend proxy. This keeps private payloads and code out of the normal React client. Authentication and role enforcement are required before external private access. See [security](security.md).
 
 Configuration: `.env` supplies database/provider credentials, discovery refresh, research window, forming thresholds, CORS, and public rate limits. `config/sectors.json` may map symbols to sectors; unmapped symbols are UNKNOWN. No Finviz scraping, sector trading rule, entry signal, automated orders, or AI analysis is present.

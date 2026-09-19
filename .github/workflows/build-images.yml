@@ -8,10 +8,10 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
-  group: images-${{ github.ref }}
+  # Serialize publishers across refs so a main/tag/manual run cannot replace a tag.
+  group: image-releases
   cancel-in-progress: false
 
 jobs:
@@ -39,9 +39,11 @@ jobs:
       - run: npm run format:check --prefix strategy-lab-frontend
       - run: npm run build --prefix strategy-lab-frontend
       - run: npx --prefix strategy-lab-frontend playwright install --with-deps chromium
+      - run: npm test --prefix frontend
       - run: npm test --prefix strategy-lab-frontend
 
   release:
+    needs: test
     runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.release.outputs.tag }}
@@ -53,18 +55,15 @@ jobs:
           set -euo pipefail
           echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           echo "repository=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
-          echo "sha-${GITHUB_SHA::7}" > release-tag.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: deployment-release-tag
-          path: release-tag.txt
-          if-no-files-found: error
 
   build:
     needs: [test, release]
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         include:
           - image: application
@@ -85,6 +84,21 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Refuse to overwrite an existing release image
+        shell: bash
+        env:
+          IMAGE: ghcr.io/${{ needs.release.outputs.repository }}/${{ matrix.image }}:${{ needs.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if docker buildx imagetools inspect "$IMAGE" >manifest.txt 2>manifest-error.txt; then
+            echo "::error::Release image already exists: $IMAGE. Rerun only failed jobs after a partial release; use a new commit for a new release."
+            exit 1
+          fi
+          # Authentication, network, and registry errors must not permit an overwrite.
+          if ! grep -Eq 'manifest unknown|MANIFEST_UNKNOWN|: not found' manifest-error.txt; then
+            cat manifest-error.txt >&2
+            exit 1
+          fi
       - uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
@@ -97,13 +111,31 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+      - name: Verify published architectures
+        shell: bash
+        env:
+          IMAGE: ghcr.io/${{ needs.release.outputs.repository }}/${{ matrix.image }}:${{ needs.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect "$IMAGE" --raw > manifest.json
+          jq -e '[.manifests[].platform | .os + "/" + .architecture] | index("linux/amd64") != null and index("linux/arm64") != null' manifest.json
 
   summary:
-    needs: [release, build]
-    if: always() && needs.build.result == 'success'
+    needs: [test, release, build]
     runs-on: ubuntu-24.04
     steps:
-      - shell: bash
+      - name: Prepare successful release artifact
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+        run: printf '%s\n' "$RELEASE_TAG" > release-tag.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deployment-release-tag
+          path: release-tag.txt
+          if-no-files-found: error
+      - name: DEPLOYMENT READY
+        shell: bash
         env:
           RELEASE_TAG: ${{ needs.release.outputs.tag }}
           REPOSITORY: ${{ needs.release.outputs.repository }}
@@ -113,13 +145,14 @@ jobs:
 
           **Release:** \`$RELEASE_TAG\`
 
-          - \`ghcr.io/$REPOSITORY/application:$RELEASE_TAG\`
-          - \`ghcr.io/$REPOSITORY/frontend:$RELEASE_TAG\`
-          - \`ghcr.io/$REPOSITORY/strategy-lab:$RELEASE_TAG\`
+          **Application image:** \`ghcr.io/$REPOSITORY/application:$RELEASE_TAG\`
 
-          Deploy from the repository checkout:
+          **Frontend image:** \`ghcr.io/$REPOSITORY/frontend:$RELEASE_TAG\`
 
-          \
-          GHCR_REPOSITORY=ghcr.io/$REPOSITORY ./scripts/deploy-k3s.sh $RELEASE_TAG
-          \
+          **Strategy Lab image:** \`ghcr.io/$REPOSITORY/strategy-lab:$RELEASE_TAG\`
+
+          Platforms: \`linux/amd64\`, \`linux/arm64\` (verified in GHCR).
+
+          Hand this release tag to the separate \`homelab-k3s\` repository for manual deployment.
+          This workflow builds and publishes images only; it does not access or deploy to a cluster.
           EOF

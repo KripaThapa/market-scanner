@@ -8,7 +8,7 @@ A deterministic, rule-based market scanner with a React read-only client, FastAP
 2. Run `docker compose up --build`.
 3. Open the public scanner at `http://127.0.0.1:${FRONTEND_PORT:-3000}` and the private Strategy Lab at `http://127.0.0.1:${STRATEGY_LAB_PORT:-3003}`. Both bind to loopback for local development.
 
-Compose starts migration, PostgreSQL, public and internal backends, scanner worker, nightly research worker, public frontend, and private Strategy Lab frontend. Public frontend/backend and Strategy Lab ports bind to loopback; PostgreSQL, workers, and the internal backend expose no host ports. The Compose frontends use Vite development servers and are **not** production deployments. For a secure external deployment see [security](docs/security.md).
+Compose starts migration, PostgreSQL, public and internal backends, scanner worker, nightly research worker, public frontend, and private Strategy Lab frontend. Public frontend/backend and Strategy Lab ports bind to loopback; PostgreSQL, workers, and the internal backend expose no host ports. The Compose frontends serve compiled assets through unprivileged Nginx. External deployment still requires the controls in [security](docs/security.md).
 
 The public UI has Dashboard, Discovery, Forming Setups, Sectors, Alerts, Settings, and symbol OHLCV detail charts. It receives sanitized display data only. Upload, Rules, Research, provenance, and Strategy Lab are private/admin functions. Compose mounts the internal API only on its private network so the loopback-only Strategy Lab frontend can proxy to it. Authentication and ADMIN/RESEARCHER authorization are still required before any private service is exposed externally. For local test data, set `SCANNER_JSON_FALLBACK=true` and edit `config/watchlist.json`; the existing uploaded watchlist remains in PostgreSQL.
 
@@ -80,6 +80,11 @@ docker compose ps
 For dependency review use `npm audit --prefix frontend` and, in a controlled Python environment, `python -m pip_audit` after installing `pip-audit`. Review findings and rerun tests before updating dependencies. Container images also need scanning as part of a production pipeline.
 
 ## Documentation
+
+Image releases follow **GitHub Actions → GHCR → SHA release tag**. The separate
+`homelab-k3s` repository owns **release tag → Kubernetes deployment**. This
+repository contains no Kubernetes manifests or cluster deployment scripts; see
+[deployment and release handoff](docs/deployment.md).
 
 - [Architecture](docs/architecture.md): provider flow, persistence, services, API boundary.
 - [Strategy](docs/strategy.md): exact existing classifier and Experimental Forming Setup V1.
