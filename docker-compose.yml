@@ -1,0 +1,185 @@
+x-python: &python
+  image: ripster-scanner-python:local
+  build:
+    context: .
+    dockerfile: Dockerfile
+
+x-database-environment: &database-environment
+  POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+  POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+  DATABASE_URL: ${DATABASE_URL:-}
+
+x-scanner-environment: &scanner-environment
+  <<: *database-environment
+  ALPACA_API_KEY: ${ALPACA_API_KEY:-}
+  ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:-}
+  ALPACA_PAPER: ${ALPACA_PAPER:-true}
+  MARKET_DATA_PROVIDER: ${MARKET_DATA_PROVIDER:-alpaca_iex}
+  FORMING_LOOKBACK_BARS: ${FORMING_LOOKBACK_BARS:-6}
+  FORMING_MIN_RETRACE_PCT: ${FORMING_MIN_RETRACE_PCT:-0.003}
+  FORMING_CLOUD_PROXIMITY_PCT: ${FORMING_CLOUD_PROXIMITY_PCT:-0.004}
+  FORMING_SLOW_TOLERANCE_PCT: ${FORMING_SLOW_TOLERANCE_PCT:-0.002}
+  TRADING_WINDOW_START: ${TRADING_WINDOW_START:-08:00}
+  TRADING_WINDOW_END: ${TRADING_WINDOW_END:-10:00}
+  TRADING_TIMEZONE: ${TRADING_TIMEZONE:-America/Chicago}
+  DISCOVERY_ENABLED: ${DISCOVERY_ENABLED:-true}
+  DISCOVERY_INTERVAL_SECONDS: ${DISCOVERY_INTERVAL_SECONDS:-300}
+  DISCOVERY_TOP_N: ${DISCOVERY_TOP_N:-10}
+
+services:
+  postgres:
+    image: postgres:16-bookworm
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  migrate:
+    <<: *python
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    environment: *database-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  backend:
+    <<: *python
+    environment:
+      <<: *scanner-environment
+      RIPSTER_DATA_DIR: /app/data
+      FRONTEND_PORT: ${FRONTEND_PORT:-3000}
+      PUBLIC_RATE_LIMIT_PER_MINUTE: ${PUBLIC_RATE_LIMIT_PER_MINUTE:-120}
+      PUBLIC_EXPENSIVE_RATE_LIMIT_PER_MINUTE: ${PUBLIC_EXPENSIVE_RATE_LIMIT_PER_MINUTE:-30}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      TRUSTED_HOSTS: ${TRUSTED_HOSTS:-localhost,127.0.0.1,backend}
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - uploads:/app/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  internal-backend:
+    <<: *python
+    command: ["python", "-m", "uvicorn", "backend.internal_api:create_internal_app", "--factory", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      <<: *scanner-environment
+      RIPSTER_DATA_DIR: /app/data
+      REPLAY_TIMEZONE: ${REPLAY_TIMEZONE:-America/Chicago}
+      REPLAY_START: ${REPLAY_START:-08:00}
+      REPLAY_EQUITY_START: ${REPLAY_EQUITY_START:-08:30}
+      REPLAY_END: ${REPLAY_END:-10:00}
+      REPLAY_WARMUP_CALENDAR_DAYS: ${REPLAY_WARMUP_CALENDAR_DAYS:-7}
+    volumes:
+      - uploads:/app/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/internal/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  scanner:
+    <<: *python
+    command: ["python", "-m", "scanner.worker"]
+    environment:
+      <<: *scanner-environment
+      SCANNER_INTERVAL_SECONDS: ${SCANNER_INTERVAL_SECONDS:-60}
+      SCANNER_JSON_FALLBACK: ${SCANNER_JSON_FALLBACK:-false}
+    volumes:
+      - ./config:/app/config:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  research:
+    <<: *python
+    command: ["python", "-m", "research.job"]
+    environment:
+      <<: *scanner-environment
+      TRADING_WINDOW_START: ${TRADING_WINDOW_START:-08:00}
+      TRADING_WINDOW_END: ${TRADING_WINDOW_END:-10:00}
+      TRADING_TIMEZONE: ${TRADING_TIMEZONE:-America/Chicago}
+      NIGHTLY_ANALYSIS_TIME: ${NIGHTLY_ANALYSIS_TIME:-18:00}
+      NIGHTLY_ANALYSIS_TIMEZONE: ${NIGHTLY_ANALYSIS_TIMEZONE:-America/Chicago}
+      BASELINE_NIGHTLY_ENABLED: ${BASELINE_NIGHTLY_ENABLED:-true}
+      BASELINE_MAX_CATCHUP_TRADING_DAYS: ${BASELINE_MAX_CATCHUP_TRADING_DAYS:-5}
+      BASELINE_PROVIDER_RETRIES: ${BASELINE_PROVIDER_RETRIES:-3}
+      BASELINE_RETRY_DELAY_SECONDS: ${BASELINE_RETRY_DELAY_SECONDS:-2}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  baseline:
+    <<: *python
+    profiles: ["tools"]
+    command: ["python", "-m", "research.baseline", "--last-trading-days", "20"]
+    environment:
+      <<: *scanner-environment
+      BASELINE_PROVIDER_RETRIES: ${BASELINE_PROVIDER_RETRIES:-3}
+      BASELINE_RETRY_DELAY_SECONDS: ${BASELINE_RETRY_DELAY_SECONDS:-2}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  strategy-lab:
+    build:
+      context: ./strategy-lab-frontend
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:${STRATEGY_LAB_PORT:-3003}:8080"
+    depends_on:
+      internal-backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  uploads:

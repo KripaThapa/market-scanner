@@ -1,0 +1,27 @@
+# Security and sharing boundary
+
+## Threat model and current posture
+
+Treat every browser and scanner API caller as untrusted. A shared deployment must protect proprietary discovery provenance, strategy thresholds, research records, credentials, uploads, and database access. The current Compose stack is for local development. It does **not** implement user authentication and must not be placed directly on the public Internet.
+
+The mounted public FastAPI app exposes read-only `/api/dashboard`, `/api/discovery`, `/api/setups/forming`, `/api/alerts`, `/api/sectors`, `/api/sectors/{sector}`, `/api/symbols/{symbol}`, `/api/symbols/{symbol}/chart`, and `/health`. Public DTOs whitelist display fields. They omit discovery source membership, watchlist/image identity, rule thresholds, strategy versions, research data, diagnostics, raw exceptions, and provider credentials. Symbol charts return OHLCV only. Public input uses bounded symbol/sector patterns and a 3m/10m timeframe enum. No public historical pagination endpoint is mounted.
+
+`backend.internal_api:create_internal_app` contains rules, research, Strategy Lab, discovery-source status, and watchlist-upload routes. Compose runs it on the private application network without a host port. The loopback-bound Strategy Lab frontend proxies `/api/internal` to it. This is network and application separation, not authentication: do not expose either private service externally. Before enabling it for external users, add a mature identity provider or maintained auth integration, enforce SCANNER_USER versus ADMIN/RESEARCHER authorization server-side, audit administrative actions, and test denied access. No custom cryptography or authentication protocol is used.
+
+## Request controls
+
+The public API has per-client, per-process sliding-window limits: `PUBLIC_RATE_LIMIT_PER_MINUTE=120` for ordinary `/api/` requests and `PUBLIC_EXPENSIVE_RATE_LIMIT_PER_MINUTE=30` for `/api/symbols/` requests. Excess returns 429 and `Retry-After: 60`. The app uses the socket peer IP, not an untrusted forwarding header. These counters are in memory and reset on restart; a production reverse proxy should enforce shared limits, connection limits, request size limits, and edge abuse detection. Application rate limiting alone is **NOT DDoS protection**.
+
+Internal screenshot upload accepts PNG/JPEG only, validates filename suffix, MIME type, actual image format and dimensions, caps the multipart body near 10 MiB and pixels at 20 million, decodes/re-encodes pixels, and writes UUID server filenames under a private upload volume. User filenames are stored as sanitized basenames for internal audit only. The public app has no upload route. Rejects do not reveal server paths. The private upload endpoint also needs authentication and edge rate limits before it is ever deployed.
+
+The public app disables interactive OpenAPI docs, sanitizes database and unexpected errors, and sends `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`, and an API CSP denying embedded content. CORS is an explicit `CORS_ALLOWED_ORIGINS` list; wildcard origins are rejected. `TRUSTED_HOSTS` is an explicit HTTP Host allowlist and must include the production reverse-proxy hostname. CORS is not authorization. HSTS belongs at an HTTPS terminating proxy and is intentionally absent from local HTTP. Avoid logging secrets or full request bodies; rate-limit violations and rejected uploads can be logged without payloads.
+
+## Production network architecture
+
+Internet → CDN/DDoS protection/WAF → HTTPS reverse proxy → public frontend and scanner API → private application network → PostgreSQL. Strategy Lab and the internal API remain outside the public reverse-proxy route. PostgreSQL, scanner, research worker, and internal API should have no public host ports. Current Compose publishes loopback public frontend/backend and private Strategy Lab ports for development; PostgreSQL, internal backend, and workers publish none. Keep provider and database credentials in server-side environment or secrets management, never in Vite variables, React source, browser storage, API responses, or logs. `.env` is ignored; `.env.example` contains placeholders. Prefer dedicated least-privilege database users in production. All SQL queries should use SQLAlchemy parameters.
+
+A production deployment must also add a built frontend served by the proxy rather than Vite's development server, trusted proxy/host configuration, HTTPS termination, HSTS, WAF/edge rate limiting, central security logs, credential rotation, backups, patch management, and a private/admin access path with authentication. Do not forward a home Raspberry Pi public IP/router port directly as the default. Do not expose the internal app until role checks are implemented.
+
+## Dependency checks
+
+Python dependencies are constrained in `pyproject.toml`; frontend dependencies use `package-lock.json`. In a controlled build environment run `python -m pip list --outdated`, `python -m pip_audit` (after installing pip-audit), and `npm audit --prefix frontend`. Review findings before updating pinned packages and rerun backend tests, frontend tests/build, and Compose smoke checks. Container images also need routine image scanning in the deployment pipeline.

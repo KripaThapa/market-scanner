@@ -1,0 +1,13 @@
+# Discovery Engine V1
+
+Discovery answers which symbols enter the active scanning universe. It does not add an entry rule or change Experimental Forming Setup V1.
+
+The worker merges the current uploaded watchlist with Alpaca Screener Most Actives, Top Gainers, and Top Losers. Symbols are normalized and scanned once per cycle. Every source membership is retained internally, including overlaps. The Alpaca Screener response is distinct from the Alpaca/IEX candle feed; metrics are kept only when the provider supplies them. Each source is refreshed independently during the configured 08:00 inclusive–10:00 exclusive America/Chicago research window. Defaults: `DISCOVERY_ENABLED=true`, `DISCOVERY_INTERVAL_SECONDS=300`, `DISCOVERY_TOP_N=10`. A failed source is logged and marked FAILED, and its same-day last-known membership remains; a successful empty response removes its membership. Outside the window, the last same-day memberships and uploaded symbols remain available to the scanner.
+
+`discovery_memberships` holds current same-day membership and first/last seen timestamps. `discovery_events` preserves appearances, changes, and departures. `discovery_source_status` distinguishes OK, EMPTY, and FAILED. `research_observation_sources` records every source attached to each observation. These tables are internal research data. Public DTOs contain no source type or upload/image identity.
+
+Sector metadata comes from optional read-only `config/sectors.json` symbol mapping. Alpaca's asset object does not supply sector/industry here. Unmapped symbols are `UNKNOWN` and still scanned. `symbol_metadata` caches sector and source; changes are updated when the configured mapping changes. `sector_snapshots` stores objective universe, context, and forming counts. No sector-strength score, ranking, or confirmation rule exists.
+
+Candle timestamps denote the start of a candle. For an evaluation time T, a 3m candle is COMPLETED when T is at or after start + 3 minutes, and PARTIAL before then; 10m follows the same rule with 10 minutes. Conversion is timezone-aware through America/New_York and UTC. The current detector can evaluate a partial 3m candle; such decisions remain eligible under existing behavior and are tagged PARTIAL. Old observations may have unknown/null metadata; history is not invented.
+
+The normal Discovery page is a source-agnostic universe page. It shows symbol, sector, price, context, setup, candle state, and update time, with sector filtering and symbol navigation. Source filtering belongs only in future authenticated research tooling. There is no Finviz integration or website scraping. Future objective screens can be added through the provider-neutral discovery result model.
