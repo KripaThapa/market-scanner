@@ -13,6 +13,23 @@ Playwright suites must pass before publishing. The three Dockerfiles build for
 `linux/amd64` and `linux/arm64` using Buildx/QEMU. Each pushed manifest is checked
 for both architectures before the release is advertised as ready.
 
+Each frontend runs setup and tests in its own working directory. Setup uses
+`npm ci --include=dev --bin-links` so the lockfile's Playwright test runner and
+local executable are installed even when npm defaults omit development tools or
+binary links. `npm ls` and a local CLI version check fail immediately if setup
+is incomplete. Each frontend's installed CLI runs
+`playwright install --with-deps chromium` to install its matching browser and
+Ubuntu system dependencies. No global Playwright or implicit `npx` download is
+used. Browser installation alone cannot fix a missing Node CLI.
+
+Keep both `node_modules` directories independent and untracked. A previously
+tracked `strategy-lab-frontend/node_modules → ../frontend/node_modules` symlink
+caused the second `npm ci` to clear the public frontend's installed executables,
+producing `playwright: not found`. The symlink is removed, ignore rules cover
+both directories and symlinks, and CI rejects symlinked dependency directories
+before installation. Both manifests and lockfiles already declare Playwright;
+no dependency version change is needed for this fix.
+
 The release tag is `sha-` followed by the first seven characters of the full
 commit SHA. The repository name is lowercased. For this repository the images are:
 

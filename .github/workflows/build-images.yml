@@ -19,6 +19,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Require independent frontend dependency directories
+        run: |
+          test ! -L frontend/node_modules
+          test ! -L strategy-lab-frontend/node_modules
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -32,15 +36,34 @@ jobs:
           cache-dependency-path: |
             frontend/package-lock.json
             strategy-lab-frontend/package-lock.json
-      - run: npm ci --prefix frontend
-      - run: npm run format:check --prefix frontend
-      - run: npm run build --prefix frontend
-      - run: npm ci --prefix strategy-lab-frontend
-      - run: npm run format:check --prefix strategy-lab-frontend
-      - run: npm run build --prefix strategy-lab-frontend
-      - run: npx --prefix strategy-lab-frontend playwright install --with-deps chromium
-      - run: npm test --prefix frontend
-      - run: npm test --prefix strategy-lab-frontend
+      - name: Install and validate public frontend
+        working-directory: frontend
+        run: |
+          npm ci --include=dev --bin-links
+          npm ls @playwright/test playwright
+          ./node_modules/.bin/playwright --version
+          npm run format:check
+          npm run build
+      - name: Install public frontend browser and system dependencies
+        working-directory: frontend
+        run: ./node_modules/.bin/playwright install --with-deps chromium
+      - name: Test public frontend
+        working-directory: frontend
+        run: npm test
+      - name: Install and validate Strategy Lab
+        working-directory: strategy-lab-frontend
+        run: |
+          npm ci --include=dev --bin-links
+          npm ls @playwright/test playwright
+          ./node_modules/.bin/playwright --version
+          npm run format:check
+          npm run build
+      - name: Install Strategy Lab browser and system dependencies
+        working-directory: strategy-lab-frontend
+        run: ./node_modules/.bin/playwright install --with-deps chromium
+      - name: Test Strategy Lab
+        working-directory: strategy-lab-frontend
+        run: npm test
 
   release:
     needs: test
