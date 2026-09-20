@@ -17,6 +17,7 @@ from research.config import load_settings as load_research_settings
 from ripster_scanner.config import load_config, load_watchlist
 from ripster_scanner.provider import build_provider
 from ripster_scanner.scan import ScanResult, scan_watchlist
+from strategy_lab.market_calendar import USEquityMarketCalendar
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ class ScannerWorker:
         self.sector_path = Path(sector_path)
         self.discovery_provider = discovery_provider
         self.discovery_settings = discovery_settings
+        self.equity_calendar = USEquityMarketCalendar()
 
     def sector_map(self):
         if not self.sector_path.exists():
@@ -59,11 +61,38 @@ class ScannerWorker:
                 if self.store.engine.dialect.name != 'postgresql' and self.discovery_provider is None:
                     settings = DiscoverySettings(False, settings.interval_seconds, settings.top)
                 research_settings = load_research_settings()
-                can_discover = settings.enabled and research_settings.inside_window(now())
+                current_time = now()
+                inside_window = research_settings.inside_window(current_time)
+                session_date = research_settings.local_date(current_time)
+                try:
+                    is_session = self.equity_calendar.is_session(session_date)
+                except ValueError:
+                    # Outside the bundled exchange calendar's supported range,
+                    # fail closed for automatic discovery but keep active scans alive.
+                    is_session = False
+                    log.warning('XNYS session status unavailable for %s; automatic discovery skipped',
+                                session_date.isoformat())
+                can_discover = settings.enabled and inside_window and is_session
                 if not current and not can_discover:
                     status = 'waiting'
-                    log.info('No active watchlist; nothing to scan')
+                    if not settings.enabled:
+                        log.info('Automatic discovery is disabled; no active watchlist; nothing to scan')
+                    elif not inside_window:
+                        log.info('Outside research window; no active watchlist; nothing to scan')
+                    elif not is_session:
+                        log.info('Non-XNYS session %s; automatic discovery skipped',
+                                 session_date.isoformat())
                     return 'empty'
+                if current:
+                    log.info('Active universe available (%s symbols); scanning',
+                             len(current['symbols']))
+                    if settings.enabled and inside_window and not is_session:
+                        log.info('Non-XNYS session %s; automatic discovery skipped',
+                                 session_date.isoformat())
+                    if current['source'] == 'discovery' and not is_session:
+                        status = 'waiting'
+                        log.info('Discovery-sourced active universe is not scanned outside XNYS sessions')
+                        return 'empty'
                 if current and current['date'] != now().date().isoformat() and current['source'] != 'discovery':
                     snapshot_id = self.store.snapshot(current['symbols'], source='rollover')
                     if not self.store.activate(snapshot_id, expected_active=current['id']):
@@ -77,11 +106,13 @@ class ScannerWorker:
                 discovery_provider = (self.discovery_provider or
                     AlpacaDiscoveryProvider(config.api_key, config.secret_key, top=settings.top)
                     if settings.enabled else self.discovery_provider)
-                universe = DiscoveryService(self.store.engine, discovery_provider, settings,
-                    research_settings).build_universe(uploaded, self.sector_map(), at=now())
+                cycle_settings = (settings if is_session else DiscoverySettings(
+                    False, settings.interval_seconds, settings.top))
+                universe = DiscoveryService(self.store.engine, discovery_provider, cycle_settings,
+                    research_settings).build_universe(uploaded, self.sector_map(), at=current_time)
                 if not universe and not current:
                     status = 'waiting'
-                    log.info('No active universe; nothing to scan')
+                    log.info('Discovery completed without an active universe; nothing to scan')
                     return 'empty'
                 if not current or (current['source'] == 'discovery' and
                                    current['date'] != now().date().isoformat() and universe):

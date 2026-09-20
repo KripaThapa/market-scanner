@@ -376,11 +376,16 @@ class StrategyReplayObservation(Base):
 class BaselineRun(Base):
     __tablename__ = 'baseline_runs'
     __table_args__ = (UniqueConstraint('start_date', 'end_date', 'strategy_version',
-                                       name='uq_baseline_run_period_version'),)
+                                       'run_type', 'universe_key',
+                                       name='uq_baseline_run_experiment'),)
     id: Mapped[int] = mapped_column(primary_key=True)
     start_date: Mapped[str] = mapped_column(String(10), index=True)
     end_date: Mapped[str] = mapped_column(String(10), index=True)
     strategy_version: Mapped[str] = mapped_column(String(80), index=True)
+    run_type: Mapped[str] = mapped_column(String(40), default='LIVE_RECORDED_UNIVERSE', index=True)
+    universe_key: Mapped[str] = mapped_column(String(64), default='LIVE')
+    universe_symbols: Mapped[list] = mapped_column(JSON, default=list)
+    research_metadata: Mapped[dict] = mapped_column(JSON, default=dict)
     status: Mapped[str] = mapped_column(String(20), index=True)
     trading_days_total: Mapped[int] = mapped_column(Integer)
     trading_days_completed: Mapped[int] = mapped_column(Integer, default=0)
@@ -405,9 +410,11 @@ class BaselineDay(Base):
 
 class BaselineSymbolDay(Base):
     __tablename__ = 'baseline_symbol_days'
-    __table_args__ = (UniqueConstraint('market_date', 'symbol', 'strategy_version',
-                                       name='uq_baseline_symbol_day_version'),)
+    __table_args__ = (UniqueConstraint('baseline_run_id', 'market_date', 'symbol',
+                                       'strategy_version',
+                                       name='uq_baseline_run_symbol_day_version'),)
     id: Mapped[int] = mapped_column(primary_key=True)
+    baseline_run_id: Mapped[int | None] = mapped_column(ForeignKey('baseline_runs.id'), index=True)
     market_date: Mapped[str] = mapped_column(String(10), index=True)
     symbol: Mapped[str] = mapped_column(String(20), index=True)
     strategy_version: Mapped[str] = mapped_column(String(80), index=True)

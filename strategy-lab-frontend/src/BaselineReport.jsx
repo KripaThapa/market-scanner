@@ -54,26 +54,96 @@ export default function BaselineReport() {
   const [report, setReport] = useState(null);
   const [episodes, setEpisodes] = useState([]);
   const [error, setError] = useState("");
+  const [symbols, setSymbols] = useState("");
+  const [sessionCount, setSessionCount] = useState(20);
+  const [submitting, setSubmitting] = useState(false);
+  const [selectedRunId, setSelectedRunId] = useState(null);
+  const load = async (runId = null) => {
+    const path = runId
+      ? `/api/internal/strategy-lab/baseline?run_id=${runId}`
+      : "/api/internal/strategy-lab/baseline";
+    const value = await request(path);
+    setReport(value);
+    setSelectedRunId(value.id ?? null);
+    if (value.id) {
+      const details = await request(
+        `/api/internal/strategy-lab/baseline/episodes?run_id=${value.id}`,
+      );
+      setEpisodes(details.items);
+    } else {
+      setEpisodes([]);
+    }
+    return value;
+  };
   useEffect(() => {
-    request("/api/internal/strategy-lab/baseline")
-      .then((value) => {
-        setReport(value);
-        if (value.id)
-          return request(
-            `/api/internal/strategy-lab/baseline/episodes?run_id=${value.id}`,
-          );
-      })
-      .then((value) => value && setEpisodes(value.items))
-      .catch((failure) => setError(failure.message));
+    load().catch((failure) => setError(failure.message));
   }, []);
+  useEffect(() => {
+    if (!selectedRunId || report?.status !== "IN_PROGRESS") return undefined;
+    const timer = window.setInterval(() => {
+      load(selectedRunId).catch((failure) => setError(failure.message));
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [selectedRunId, report?.status]);
+  const submitFixed = async (event) => {
+    event.preventDefault();
+    setSubmitting(true);
+    setError("");
+    try {
+      const response = await request(
+        "/api/internal/strategy-lab/baseline/fixed-universe",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            symbols: symbols.split(/[\s,]+/).filter(Boolean),
+            last_trading_days: Number(sessionCount),
+          }),
+        },
+      );
+      await load(response.id);
+    } catch (failure) {
+      setError(failure.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
   if (error) return <section className="error">{error}</section>;
   if (!report) return <p>Loading historical baseline…</p>;
   if (report.status === "NOT_RUN")
     return (
-      <section className="baseline-empty">
-        <h2>Historical Strategy Baseline</h2>
-        <p>No baseline backfill has been run yet.</p>
-      </section>
+      <div className="baseline-report">
+        <section className="baseline-empty">
+          <h2>Historical Strategy Baseline</h2>
+          <p>No baseline run has been recorded yet.</p>
+        </section>
+        <form className="fixed-research-form" onSubmit={submitFixed}>
+          <h2>Fixed research universe</h2>
+          <p>Fixed research universe — historical what-if analysis.</p>
+          <label>
+            Symbols (comma or space separated)
+            <textarea
+              value={symbols}
+              onChange={(event) => setSymbols(event.target.value)}
+              placeholder="NVDA, AMD, TSLA, AAPL"
+              rows={3}
+              required
+            />
+          </label>
+          <label>
+            Previous completed XNYS sessions
+            <input
+              type="number"
+              min="1"
+              max="250"
+              value={sessionCount}
+              onChange={(event) => setSessionCount(event.target.value)}
+            />
+          </label>
+          <button type="submit" disabled={submitting}>
+            {submitting ? "Starting…" : "Run fixed-universe analysis"}
+          </button>
+        </form>
+      </div>
     );
   const requested =
     report.coverage.trading_sessions_requested ?? report.coverage.trading_days;
@@ -90,6 +160,51 @@ export default function BaselineReport() {
           not a win rate.
         </p>
       </header>
+      <form className="fixed-research-form" onSubmit={submitFixed}>
+        <h2>Fixed research universe</h2>
+        <p>Fixed research universe — historical what-if analysis.</p>
+        <label>
+          Symbols (comma or space separated)
+          <textarea
+            value={symbols}
+            onChange={(event) => setSymbols(event.target.value)}
+            placeholder="NVDA, AMD, TSLA, AAPL"
+            rows={3}
+            required
+          />
+        </label>
+        <label>
+          Previous completed XNYS sessions
+          <input
+            type="number"
+            min="1"
+            max="250"
+            value={sessionCount}
+            onChange={(event) => setSessionCount(event.target.value)}
+          />
+        </label>
+        <button type="submit" disabled={submitting}>
+          {submitting ? "Starting…" : "Run fixed-universe analysis"}
+        </button>
+      </form>
+      {report.run_type === "FIXED_RESEARCH_UNIVERSE" && (
+        <section className="fixed-research-notice">
+          <h2>Fixed research universe — historical what-if analysis.</h2>
+          <p>
+            These selected symbols are not evidence of what the scanner
+            historically discovered or traded.
+          </p>
+          <p>
+            Research universe: {(report.research_universe || []).join(", ")}
+          </p>
+          <p>
+            Symbol-days attempted: {report.coverage.symbol_days_attempted} ·
+            successfully evaluated: {report.coverage.symbols_evaluated} ·
+            provider NO_DATA: {report.coverage.provider_no_data} · failures:{" "}
+            {report.coverage.symbol_failures}
+          </p>
+        </section>
+      )}
       {missing > 0 && (
         <section className="baseline-coverage-warning" role="alert">
           <h2>
@@ -105,6 +220,12 @@ export default function BaselineReport() {
         </section>
       )}
       <section className="baseline-summary">
+        {report.run_type && (
+          <div>
+            <span>Run type</span>
+            <strong>{report.run_type}</strong>
+          </div>
+        )}
         <div>
           <span>Period</span>
           <strong>
@@ -120,13 +241,24 @@ export default function BaselineReport() {
           <strong>{requested}</strong>
         </div>
         <div>
-          <span>Sessions with universe</span>
-          <strong>{covered}</strong>
+          <span>Sessions processed</span>
+          <strong>
+            {report.coverage.trading_sessions_processed ??
+              report.coverage.trading_days_completed}
+          </strong>
         </div>
-        <div>
-          <span>Sessions missing universe</span>
-          <strong>{missing}</strong>
-        </div>
+        {report.run_type !== "FIXED_RESEARCH_UNIVERSE" && (
+          <div>
+            <span>Sessions with universe</span>
+            <strong>{covered}</strong>
+          </div>
+        )}
+        {report.run_type !== "FIXED_RESEARCH_UNIVERSE" && (
+          <div>
+            <span>Sessions missing universe</span>
+            <strong>{missing}</strong>
+          </div>
+        )}
         <div>
           <span>Symbols evaluated</span>
           <strong>{report.coverage.symbols_evaluated}</strong>

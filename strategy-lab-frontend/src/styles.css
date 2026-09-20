@@ -51,6 +51,40 @@ main {
   background: #302315;
   border-color: #9a672f;
 }
+
+.fixed-research-form,
+.fixed-research-notice {
+  background: #151b23;
+  border: 1px solid #344150;
+  border-radius: 8px;
+  margin: 1rem 0;
+  padding: 1rem;
+}
+
+.fixed-research-form {
+  display: grid;
+  gap: 0.8rem;
+  max-width: 48rem;
+}
+
+.fixed-research-form label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.fixed-research-form textarea,
+.fixed-research-form input {
+  background: #0d1117;
+  border: 1px solid #465567;
+  border-radius: 5px;
+  color: inherit;
+  font: inherit;
+  padding: 0.6rem;
+}
+
+.fixed-research-notice {
+  border-color: #527b9b;
+}
 .baseline-coverage-warning h2 {
   margin: 0 0 8px;
   color: #ffd28c;

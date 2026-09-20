@@ -390,6 +390,78 @@ test("all missing-universe sessions are reported as unavailable coverage", async
   await expect(page.getByText("Sessions missing universe")).toBeVisible();
 });
 
+test("fixed research universe can be started and is clearly labeled as what-if", async ({
+  page,
+}) => {
+  await mockCreationData(page);
+  const metric = {
+    percentage: 50,
+    numerator: 1,
+    denominator: 2,
+    insufficient: 0,
+    median_percent: 0.12,
+  };
+  const report = {
+    id: 42,
+    run_type: "FIXED_RESEARCH_UNIVERSE",
+    research_universe: ["AMD", "NVDA"],
+    research_metadata: {},
+    status: "COMPLETED",
+    period: { start: "2026-09-17", end: "2026-09-18" },
+    strategy_version: "experimental-forming-v1/b067b3150de3",
+    coverage: {
+      trading_sessions_requested: 2,
+      trading_sessions_processed: 2,
+      symbol_days_attempted: 4,
+      symbols_evaluated: 3,
+      provider_no_data: 1,
+      symbol_failures: 0,
+      eligible_evaluations: 90,
+      sessions_with_universe_coverage: 0,
+      sessions_missing_universe: 0,
+    },
+    forming_long: {
+      episodes: 2,
+      bars_3: metric,
+      bars_5: metric,
+      bars_10: metric,
+      median_favorable_excursion_percent: 0.3,
+      median_adverse_excursion_percent: -0.1,
+    },
+    forming_short: {
+      episodes: 1,
+      bars_3: metric,
+      bars_5: metric,
+      bars_10: metric,
+      median_favorable_excursion_percent: 0.2,
+      median_adverse_excursion_percent: -0.1,
+    },
+  };
+  await page.route("**/api/internal/strategy-lab/baseline**", (route) => {
+    if (route.request().method() === "POST")
+      return route.fulfill({ status: 202, json: report });
+    return route.fulfill({ json: report });
+  });
+  await page.route(
+    "**/api/internal/strategy-lab/baseline/episodes?**",
+    (route) => route.fulfill({ json: { items: [] } }),
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: "Historical baseline" }).click();
+  await page.getByLabel("Symbols (comma or space separated)").fill("nvda, amd");
+  await page
+    .getByRole("button", { name: "Run fixed-universe analysis" })
+    .click();
+  await expect(
+    page.getByRole("heading", {
+      name: "Fixed research universe — historical what-if analysis.",
+    }),
+  ).toBeVisible();
+  await expect(page.getByText("Research universe: AMD, NVDA")).toBeVisible();
+  await expect(page.getByText(/provider NO_DATA: 1/)).toBeVisible();
+  await expect(page.getByText("FIXED_RESEARCH_UNIVERSE")).toBeVisible();
+});
+
 test("custom equity time, empty-universe manual fallback, and futures separation", async ({
   page,
 }) => {

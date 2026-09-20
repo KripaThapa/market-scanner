@@ -7,8 +7,9 @@ from unittest.mock import patch
 
 from sqlalchemy import func, select
 
-from backend.database.models import (DiscoveryEvent, DiscoveryMembership,
-    DiscoverySourceStatus, SectorSnapshot, SymbolMetadata, ResearchObservation)
+from backend.database.models import (ActiveUniverseMember, DiscoveryEvent,
+    DiscoveryMembership, DiscoverySourceStatus, SectorSnapshot, SymbolMetadata,
+    ResearchObservation)
 from db_support import test_store
 from discovery.candle_state import candle_state
 from discovery.alpaca import AlpacaDiscoveryProvider
@@ -159,6 +160,58 @@ class DiscoveryTests(unittest.TestCase):
             sector='Technology')}, {'AMD', 'MSFT'})
         self.assertEqual(len(research.list_observations(candle_state='COMPLETED')), 0)
         self.assertEqual(len(research.list_observations(decision_eligible=False)), 4)
+
+    def _run_automatic_worker(self, at):
+        worker = ScannerWorker(self.store, discovery_provider=self.provider,
+            discovery_settings=DiscoverySettings(True, 300, 10))
+        with patch('scanner.worker.now', return_value=at), \
+             patch('backend.store.now', return_value=at), \
+             patch('scanner.worker.load_config', side_effect=lambda *, symbols:
+                   Config('fake', 'fake', symbols)), \
+             patch('scanner.worker.StockHistoricalDataClient'), \
+             patch('scanner.worker.scan_watchlist', side_effect=lambda config, provider:
+                   [ScanResult(config.symbols[0])]):
+            return worker.run_once()
+
+    def test_automatic_discovery_runs_inside_window_on_xnys_session_without_upload(self):
+        self.assertEqual(self._run_automatic_worker(MORNING), 'scanned')
+        self.assertEqual(len(self.provider.calls), 3)
+        with self.store.session() as session:
+            self.assertGreater(session.scalar(select(func.count()).select_from(
+                DiscoveryMembership)), 0)
+            self.assertGreater(session.scalar(select(func.count()).select_from(
+                ActiveUniverseMember)), 0)
+
+    def test_automatic_discovery_skips_weekend_and_xnys_holiday_inside_window(self):
+        for at in (datetime(2026, 9, 20, 13, 30, tzinfo=timezone.utc),
+                   datetime(2026, 7, 3, 13, 30, tzinfo=timezone.utc)):
+            self.provider.calls.clear()
+            with self.subTest(at=at):
+                self.assertEqual(self._run_automatic_worker(at), 'empty')
+            self.assertEqual(self.provider.calls, [])
+
+    def test_discovery_service_itself_fails_closed_on_non_session(self):
+        for at in (datetime(2026, 9, 20, 13, 30, tzinfo=timezone.utc),
+                   datetime(2026, 7, 3, 13, 30, tzinfo=timezone.utc)):
+            self.assertEqual(self.service.build_universe((), at=at), {})
+        self.assertEqual(self.provider.calls, [])
+
+    def test_stale_discovery_snapshot_is_not_scanned_on_weekend(self):
+        snapshot = self.store.snapshot(('AMD',), source='discovery')
+        self.store.activate(snapshot)
+        self.assertEqual(self._run_automatic_worker(
+            datetime(2026, 9, 20, 13, 30, tzinfo=timezone.utc)), 'empty')
+        self.assertEqual(self.provider.calls, [])
+        with self.store.session() as session:
+            self.assertEqual(session.scalar(select(func.count()).select_from(
+                ActiveUniverseMember)), 0)
+            self.assertEqual(session.scalar(select(func.count()).select_from(
+                ResearchObservation)), 0)
+
+    def test_automatic_discovery_skips_outside_window_on_valid_session(self):
+        self.assertEqual(self._run_automatic_worker(
+            datetime(2026, 9, 18, 17, 0, tzinfo=timezone.utc)), 'empty')
+        self.assertEqual(self.provider.calls, [])
 
 
 class CandleStateTests(unittest.TestCase):

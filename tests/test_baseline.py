@@ -3,19 +3,23 @@
 from datetime import date, datetime, timezone
 import unittest
 from zoneinfo import ZoneInfo
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from backend.api import create_app
 from backend.database.models import (BaselineDay, BaselineEpisode, BaselineEvaluation,
-    BaselineRun, BaselineSymbolDay, DiscoveryMembership)
+    ActiveUniverseMember, BaselineRun, BaselineSymbolDay, DiscoveryMembership,
+    WatchlistUpload)
 from backend.internal_api import create_internal_app
 from db_support import test_store
-from research.baseline import HistoricalBaseline, completed_sessions
+from research.baseline import HistoricalBaseline, completed_sessions, main
 from ripster_scanner.config import forming_thresholds
 from ripster_scanner.strategy import strategy_version_id
 from strategy_lab.market_calendar import USEquityMarketCalendar
+from strategy_lab.domain import ReplayDataUnavailable
+from strategy_lab.service import StrategyLabService
 from test_strategy_lab import MemoryProvider
 
 
@@ -164,6 +168,37 @@ class BaselineTests(unittest.TestCase):
         self.assertEqual(private.get('/api/internal/strategy-lab/baseline/episodes').status_code, 200)
         self.assertEqual(public.get('/api/internal/strategy-lab/baseline').status_code, 404)
 
+    def test_private_api_starts_and_reports_fixed_universe_run(self):
+        private = TestClient(create_internal_app(store=self.store,
+            replay_provider=MemoryProvider()), base_url='http://localhost')
+        response = private.post('/api/internal/strategy-lab/baseline/fixed-universe', json={
+            'symbols': ['nvda', 'NVDA'], 'last_trading_days': 1})
+        self.assertEqual(response.status_code, 202)
+        result = response.json()
+        self.assertEqual(result['run_type'], 'FIXED_RESEARCH_UNIVERSE')
+        self.assertEqual(result['research_universe'], ['NVDA'])
+        final = private.get('/api/internal/strategy-lab/baseline',
+            params={'run_id': result['id']}).json()
+        self.assertEqual(final['coverage']['symbol_days_attempted'], 1)
+        self.assertEqual(final['coverage']['symbols_evaluated'], 1)
+
+    def test_fixed_universe_cli_uses_same_completed_session_selection(self):
+        summary = {'id': 1, 'status': 'COMPLETED',
+            'coverage': {'trading_sessions_processed': 1,
+                'trading_sessions_requested': 1, 'sessions_with_universe_coverage': 0,
+                'sessions_missing_universe': 0, 'symbols_evaluated': 2,
+                'eligible_evaluations': 60, 'symbol_failures': 0},
+            'forming_long': {'episodes': 1}, 'forming_short': {'episodes': 2}}
+        with patch('research.baseline.make_baseline') as make:
+            baseline = make.return_value
+            baseline.calendar = USEquityMarketCalendar()
+            baseline.execute_fixed.return_value = summary
+            main(['--fixed-universe', ' nvda,AMD,NVDA ', '--last-trading-days', '1'])
+        symbols, days = baseline.execute_fixed.call_args.args
+        self.assertEqual(symbols, [' nvda', 'AMD', 'NVDA '])
+        self.assertEqual(len(days), 1)
+        self.assertTrue(USEquityMarketCalendar().is_session(days[0]))
+
     def test_missing_universe_records_coverage_limitation(self):
         report = self.baseline().execute([date(2026, 9, 17)])
         self.assertEqual(report['coverage']['symbols_evaluated'], 0)
@@ -212,6 +247,97 @@ class BaselineTests(unittest.TestCase):
     def test_frozen_forming_version_hash_is_unchanged(self):
         self.assertEqual(strategy_version_id(forming_thresholds()),
                          'experimental-forming-v1/b067b3150de3')
+
+    def test_fixed_universe_uses_only_normalized_user_symbols_and_is_isolated(self):
+        before_memberships = self.store.engine.connect().exec_driver_sql(
+            'SELECT COUNT(*) FROM discovery_memberships').scalar_one()
+        report = self.baseline().execute_fixed([' nvda ', 'AMD', 'NVDA'], [self.day])
+        self.assertEqual(report['run_type'], 'FIXED_RESEARCH_UNIVERSE')
+        self.assertEqual(report['research_universe'], ['AMD', 'NVDA'])
+        self.assertEqual(report['coverage']['symbol_days_attempted'], 2)
+        self.assertEqual(report['coverage']['symbols_evaluated'], 2)
+        self.assertEqual(report['coverage']['trading_sessions_processed'], 1)
+        self.assertEqual(report['research_metadata']['decision_window'], {
+            'start': '08:30', 'end': '10:00', 'timezone': 'America/Chicago'})
+        with self.store.session() as session:
+            self.assertEqual(session.scalar(select(func.count()).select_from(
+                DiscoveryMembership)), before_memberships)
+            self.assertEqual(session.scalar(select(func.count()).select_from(
+                WatchlistUpload)), 0)
+            self.assertEqual(session.scalar(select(func.count()).select_from(
+                ActiveUniverseMember)), 0)
+            self.assertEqual({row.symbol for row in session.scalars(
+                select(BaselineSymbolDay).where(
+                    BaselineSymbolDay.baseline_run_id == report['id']))}, {'AMD', 'NVDA'})
+
+    def test_fixed_universe_rerun_is_idempotent_and_separate_from_live_run(self):
+        baseline = self.baseline()
+        fixed = baseline.execute_fixed(['amd', 'NVDA'], [self.day])
+        again = baseline.execute_fixed(['NVDA', 'AMD', 'amd'], [self.day])
+        live = baseline.execute([self.day])
+        self.assertEqual(fixed['id'], again['id'])
+        self.assertNotEqual(fixed['id'], live['id'])
+        with self.store.session() as session:
+            fixed_days = session.scalars(select(BaselineSymbolDay).where(
+                BaselineSymbolDay.baseline_run_id == fixed['id'])).all()
+            self.assertEqual(len(fixed_days), 2)
+            self.assertEqual(session.scalar(select(func.count()).select_from(
+                BaselineEvaluation).where(BaselineEvaluation.symbol_day_id.in_(
+                    [item.id for item in fixed_days]))), 60)
+
+    def test_nightly_catchup_never_returns_fixed_universe_as_live_baseline(self):
+        baseline = self.baseline()
+        baseline.execute_fixed(['NVDA'], [self.day])
+        class EmptyCatalog:
+            def candidates_for_date(self, trading_date, *, as_of=None):
+                return []
+        baseline.catalog = EmptyCatalog()
+        self.assertIsNone(baseline.catch_up(1))
+
+    def test_fixed_symbol_days_never_satisfy_live_nightly_catchup(self):
+        at = datetime(2026, 9, 18, 13, 0, tzinfo=UTC)
+        with self.store.session() as session:
+            session.add(DiscoveryMembership(trading_date=self.day.isoformat(), symbol='NVDA',
+                source_type='MOST_ACTIVE', provider='Fixture', first_seen_at=at,
+                last_seen_at=at, active=True, metrics={}))
+        baseline = self.baseline()
+        fixed = baseline.execute_fixed(['NVDA'], [self.day])
+        live = baseline.catch_up(1)
+        self.assertEqual(fixed['run_type'], 'FIXED_RESEARCH_UNIVERSE')
+        self.assertEqual(live['run_type'], 'LIVE_RECORDED_UNIVERSE')
+        self.assertEqual(live['coverage']['symbols_evaluated'], 2)
+
+    def test_provider_no_data_isolated_to_one_fixed_symbol_day(self):
+        class OneNoData(FakeReplay):
+            def create(self, symbol, asset_type, market_date, start, end):
+                if symbol == 'MISSING':
+                    raise ReplayDataUnavailable('fixture has no bars')
+                return super().create(symbol, asset_type, market_date, start, end)
+        report = self.baseline(OneNoData()).execute_fixed(['MISSING', 'NVDA'], [self.day])
+        self.assertEqual(report['coverage']['symbol_days_attempted'], 2)
+        self.assertEqual(report['coverage']['symbols_evaluated'], 1)
+        self.assertEqual(report['coverage']['provider_no_data'], 1)
+        self.assertEqual(report['coverage']['symbol_failures'], 0)
+
+    def test_fixed_universe_decisions_are_bounded_against_future_candles(self):
+        from test_strategy_lab import fixture
+
+        reports = []
+        for frame in (fixture(extreme=10000), fixture(extreme=999999)):
+            store = test_store(self)
+            service = StrategyLabService(store.engine, MemoryProvider(frame=frame))
+            baseline = HistoricalBaseline(store.engine, replay_service=service,
+                provider_retries=1, retry_delay_seconds=0, progress=lambda _: None)
+            report = baseline.execute_fixed(['NVDA'], [self.day])
+            with store.session() as session:
+                rows = session.scalars(select(BaselineEvaluation).where(
+                    BaselineEvaluation.evaluated_at <= datetime(2026, 9, 18, 13, 48,
+                        tzinfo=UTC))).all()
+                reports.append([(row.evaluated_at, row.context_10m, row.state_3m,
+                    row.price, row.ema_5, row.ema_12, row.ema_34, row.ema_50, row.vwap)
+                    for row in rows])
+                self.assertEqual(report['run_type'], 'FIXED_RESEARCH_UNIVERSE')
+        self.assertEqual(reports[0], reports[1])
 
     def test_nightly_catchup_finds_missing_days_in_chronological_order(self):
         baseline = self.baseline()

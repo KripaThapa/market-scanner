@@ -2,13 +2,16 @@
 
 import argparse
 from datetime import date, datetime, time, timedelta, timezone
+import hashlib
+import json
 import logging
 import os
+import re
 import statistics
 import time as clock
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from backend.database.config import make_engine
@@ -24,6 +27,9 @@ from strategy_lab.service import StrategyLabService
 log = logging.getLogger(__name__)
 CT = ZoneInfo('America/Chicago')
 FORMING = {'FORMING_LONG', 'FORMING_SHORT'}
+LIVE_RUN = 'LIVE_RECORDED_UNIVERSE'
+FIXED_RUN = 'FIXED_RESEARCH_UNIVERSE'
+SYMBOL_PATTERN = re.compile(r'^[A-Z][A-Z0-9.-]{0,19}$')
 
 
 def completed_sessions(calendar, *, start=None, end=None, last_trading_days=None, now=None):
@@ -74,16 +80,51 @@ class HistoricalBaseline:
                             float(os.getenv('BASELINE_RETRY_DELAY_SECONDS', '2')))
         self.progress = progress or (lambda message: log.info(message))
 
-    def _run(self, days):
+    def _metadata(self, days):
+        provider = getattr(self.lab, 'provider', None)
+        source = getattr(provider, 'source', None)
+        return {'provider': getattr(source, 'provider', None),
+            'feed': getattr(source, 'feed', None),
+            'market_timezone': getattr(source, 'timezone', 'America/New_York'),
+            'research_timezone': 'America/Chicago',
+            'decision_window': {'start': '08:30', 'end': '10:00',
+                                'timezone': 'America/Chicago'},
+            'session_policy': getattr(source, 'session_policy', None),
+            'requested_sessions': [day.isoformat() for day in days],
+            'source_timeframe': '1m', 'aggregation': {'3m': 'existing Strategy Lab',
+                                                       '10m': 'existing Strategy Lab'}}
+
+    @staticmethod
+    def normalize_symbols(symbols):
+        normalized = sorted({str(value).strip().upper() for value in symbols
+                             if str(value).strip()})
+        invalid = [value for value in normalized if not SYMBOL_PATTERN.fullmatch(value)]
+        if invalid:
+            raise ValueError(f'Invalid research symbol(s): {", ".join(invalid)}')
+        if not normalized:
+            raise ValueError('The fixed research universe must contain at least one symbol')
+        if len(normalized) > 100:
+            raise ValueError('The fixed research universe is limited to 100 symbols')
+        return normalized
+
+    def _run(self, days, *, run_type=LIVE_RUN, symbols=()):
         start, end = days[0].isoformat(), days[-1].isoformat()
+        symbols = list(symbols)
+        metadata = self._metadata(days)
+        universe_key = ('LIVE' if run_type == LIVE_RUN else hashlib.sha256(
+            json.dumps({'symbols': symbols, 'metadata': metadata}, sort_keys=True,
+                       separators=(',', ':')).encode()).hexdigest())
         now = datetime.now(timezone.utc)
         with Session(self.engine) as session, session.begin():
             run = session.scalar(select(BaselineRun).where(BaselineRun.start_date == start,
                 BaselineRun.end_date == end,
-                BaselineRun.strategy_version == self.strategy_version))
+                BaselineRun.strategy_version == self.strategy_version,
+                BaselineRun.run_type == run_type, BaselineRun.universe_key == universe_key))
             if run is None:
                 run = BaselineRun(start_date=start, end_date=end,
-                    strategy_version=self.strategy_version, status='IN_PROGRESS',
+                    strategy_version=self.strategy_version, run_type=run_type,
+                    universe_key=universe_key, universe_symbols=symbols,
+                    research_metadata=metadata, status='IN_PROGRESS',
                     trading_days_total=len(days), trading_days_completed=0,
                     symbol_failures=0, created_at=now, updated_at=now)
                 session.add(run)
@@ -97,15 +138,44 @@ class HistoricalBaseline:
     def execute(self, days):
         if not days:
             raise ValueError('No completed XNYS trading sessions selected')
-        run_id = self._run(days)
-        self.progress(f'Historical Strategy Baseline\nStrategy: {self.strategy_version}\n'
+        run_id = self._run(days, run_type=LIVE_RUN)
+        return self._execute_run(run_id, days, run_type=LIVE_RUN)
+
+    def prepare_fixed(self, symbols, days):
+        if not days:
+            raise ValueError('No completed XNYS trading sessions selected')
+        symbols = self.normalize_symbols(symbols)
+        return self._run(days, run_type=FIXED_RUN, symbols=symbols)
+
+    def execute_fixed(self, symbols, days, run_id=None):
+        if not days:
+            raise ValueError('No completed XNYS trading sessions selected')
+        symbols = self.normalize_symbols(symbols)
+        if run_id is None:
+            run_id = self._run(days, run_type=FIXED_RUN, symbols=symbols)
+        else:
+            with Session(self.engine) as session:
+                run = session.get(BaselineRun, run_id)
+                if (run is None or run.run_type != FIXED_RUN or
+                        run.universe_symbols != symbols or
+                        run.start_date != days[0].isoformat() or
+                        run.end_date != days[-1].isoformat() or
+                        run.strategy_version != self.strategy_version):
+                    raise ValueError('Fixed research run metadata does not match this execution')
+        return self._execute_run(run_id, days, run_type=FIXED_RUN, symbols=symbols)
+
+    def _execute_run(self, run_id, days, *, run_type, symbols=()):
+        title = 'Fixed research universe — historical what-if analysis' \
+            if run_type == FIXED_RUN else 'Historical Strategy Baseline'
+        self.progress(f'{title}\nStrategy: {self.strategy_version}\n'
                       f'Period: {days[0]} through {days[-1]}')
         for index, day in enumerate(days, 1):
-            self._day(run_id, day, index, len(days))
+            self._day(run_id, day, index, len(days),
+                      fixed_symbols=symbols if run_type == FIXED_RUN else None)
         self._refresh_run(run_id)
         return self.report(run_id)
 
-    def _day(self, run_id, day, day_number, total_days):
+    def _day(self, run_id, day, day_number, total_days, fixed_symbols=None):
         day_text = day.isoformat()
         now = datetime.now(timezone.utc)
         with Session(self.engine) as session, session.begin():
@@ -123,15 +193,21 @@ class HistoricalBaseline:
         seen = set()
         cursor = start
         while cursor <= end:
-            candidates = self.catalog.candidates_for_date(day_text, as_of=cursor)
-            fresh = [candidate for candidate in candidates
-                     if candidate['symbol'] not in seen]
+            candidates = ([{'symbol': symbol, 'sources': [], 'sector': None}
+                           for symbol in fixed_symbols] if fixed_symbols is not None else
+                          self.catalog.candidates_for_date(day_text, as_of=cursor))
+            fresh = [candidate for candidate in candidates if candidate['symbol'] not in seen]
             for candidate in fresh:
                 seen.add(candidate['symbol'])
                 try:
-                    self._symbol(day, candidate, start_at=cursor)
+                    self._symbol(day, candidate, run_id=run_id,
+                        start_at=start if fixed_symbols is not None else cursor,
+                        fixed=fixed_symbols is not None)
                 except Exception as exc:
-                    self._fail_symbol(day_text, candidate, exc)
+                    no_data = (getattr(exc, 'details', None) or {}).get('error') == 'NO_DATA'
+                    self._fail_symbol(day_text, candidate, exc, run_id=run_id,
+                                      status='NO_DATA' if no_data else 'FAILED',
+                                      fixed=fixed_symbols is not None)
                     log.warning('Baseline %s %s failed: %s', day_text, candidate['symbol'], exc)
             self.progress(f'Trading sessions: {day_number} / {total_days}\n'
                           f'Current date: {day_text}\n'
@@ -148,9 +224,11 @@ class HistoricalBaseline:
                     'No historical scanner universe was recorded during the baseline window.')
             else:
                 row.coverage_limitation = None
-                counts = self._day_counts(day_text, session=session)
+                counts = self._day_counts(day_text, run_id=run_id,
+                    fixed=fixed_symbols is not None, session=session)
                 row.symbols_completed, row.symbols_failed = counts['completed'], counts['failed']
-                row.status = 'COMPLETED_WITH_FAILURES' if counts['failed'] else 'COMPLETED'
+                row.status = ('COMPLETED_WITH_FAILURES'
+                    if counts['failed'] or counts['no_data'] else 'COMPLETED')
             row.updated_at = datetime.now(timezone.utc)
         self._refresh_run(run_id)
 
@@ -167,18 +245,22 @@ class HistoricalBaseline:
                     clock.sleep(self.retry_delay * attempt)
         raise error
 
-    def _symbol(self, day, candidate, *, start_at=None):
+    def _symbol(self, day, candidate, *, run_id, start_at=None, fixed=False):
         day_text, symbol = day.isoformat(), candidate['symbol']
         now = datetime.now(timezone.utc)
         with Session(self.engine) as session, session.begin():
-            item = session.scalar(select(BaselineSymbolDay).where(
+            scope = BaselineSymbolDay.baseline_run_id == run_id
+            if not fixed:
+                scope = or_(scope, BaselineSymbolDay.baseline_run_id.is_(None))
+            item = session.scalar(select(BaselineSymbolDay).where(scope,
                 BaselineSymbolDay.market_date == day_text,
                 BaselineSymbolDay.symbol == symbol,
                 BaselineSymbolDay.strategy_version == self.strategy_version))
             if item is not None and item.status == 'COMPLETED':
                 return
             if item is None:
-                item = BaselineSymbolDay(market_date=day_text, symbol=symbol,
+                item = BaselineSymbolDay(baseline_run_id=run_id,
+                    market_date=day_text, symbol=symbol,
                     strategy_version=self.strategy_version, status='IN_PROGRESS',
                     sector=candidate.get('sector'), provenance=candidate.get('sources', []),
                     created_at=now, updated_at=now)
@@ -263,25 +345,32 @@ class HistoricalBaseline:
                 row.maximum_adverse_excursion = values['maximum_adverse_excursion']
                 row.evaluated_at = datetime.now(timezone.utc)
 
-    def _fail_symbol(self, day, candidate, exc):
+    def _fail_symbol(self, day, candidate, exc, *, run_id, status='FAILED', fixed=False):
         now = datetime.now(timezone.utc)
         with Session(self.engine) as session, session.begin():
-            row = session.scalar(select(BaselineSymbolDay).where(
+            scope = BaselineSymbolDay.baseline_run_id == run_id
+            if not fixed:
+                scope = or_(scope, BaselineSymbolDay.baseline_run_id.is_(None))
+            row = session.scalar(select(BaselineSymbolDay).where(scope,
                 BaselineSymbolDay.market_date == day,
                 BaselineSymbolDay.symbol == candidate['symbol'],
                 BaselineSymbolDay.strategy_version == self.strategy_version))
             if row is None:
-                row = BaselineSymbolDay(market_date=day, symbol=candidate['symbol'],
+                row = BaselineSymbolDay(baseline_run_id=run_id,
+                    market_date=day, symbol=candidate['symbol'],
                     strategy_version=self.strategy_version, sector=candidate.get('sector'),
                     provenance=candidate.get('sources', []), created_at=now)
                 session.add(row)
-            row.status, row.error, row.updated_at = 'FAILED', str(exc)[:1000], now
+            row.status, row.error, row.updated_at = status, str(exc)[:1000], now
 
-    def _day_counts(self, day, session=None):
+    def _day_counts(self, day, *, run_id, fixed=False, session=None):
         owns = session is None
         session = session or Session(self.engine)
         try:
-            base = select(BaselineSymbolDay).where(BaselineSymbolDay.market_date == day,
+            scope = BaselineSymbolDay.baseline_run_id == run_id
+            if not fixed:
+                scope = or_(scope, BaselineSymbolDay.baseline_run_id.is_(None))
+            base = select(BaselineSymbolDay).where(scope, BaselineSymbolDay.market_date == day,
                 BaselineSymbolDay.strategy_version == self.strategy_version)
             rows = session.scalars(base).all()
             ids = [row.id for row in rows]
@@ -289,6 +378,7 @@ class HistoricalBaseline:
                 BaselineEpisode.symbol_day_id.in_(ids)))) if ids else []
             return {'completed': sum(row.status == 'COMPLETED' for row in rows),
                     'failed': sum(row.status == 'FAILED' for row in rows),
+                    'no_data': sum(row.status == 'NO_DATA' for row in rows),
                     'long': states.count('FORMING_LONG'), 'short': states.count('FORMING_SHORT')}
         finally:
             if owns:
@@ -309,13 +399,21 @@ class HistoricalBaseline:
                 run.status = 'COMPLETED'
             run.updated_at = datetime.now(timezone.utc)
 
-    def report(self, run_id=None):
+    def report(self, run_id=None, *, run_type=None):
         with Session(self.engine) as session:
-            run = (session.get(BaselineRun, run_id) if run_id else session.scalar(
-                select(BaselineRun).order_by(BaselineRun.updated_at.desc()).limit(1)))
+            if run_id:
+                run = session.get(BaselineRun, run_id)
+            else:
+                query = select(BaselineRun)
+                if run_type:
+                    query = query.where(BaselineRun.run_type == run_type)
+                run = session.scalar(query.order_by(BaselineRun.updated_at.desc()).limit(1))
             if run is None:
                 return None
-            symbol_days = session.scalars(select(BaselineSymbolDay).where(
+            symbol_scope = BaselineSymbolDay.baseline_run_id == run.id
+            if run.run_type == LIVE_RUN:
+                symbol_scope = or_(symbol_scope, BaselineSymbolDay.baseline_run_id.is_(None))
+            symbol_days = session.scalars(select(BaselineSymbolDay).where(symbol_scope,
                 BaselineSymbolDay.market_date >= run.start_date,
                 BaselineSymbolDay.market_date <= run.end_date,
                 BaselineSymbolDay.strategy_version == run.strategy_version)).all()
@@ -334,7 +432,7 @@ class HistoricalBaseline:
             universe_sessions = sum(day.status != 'NO_UNIVERSE' and day.symbols_total > 0
                                     for day in days)
             report_status = ('IN_PROGRESS' if processed_sessions < run.trading_days_total else
-                'INCOMPLETE' if missing_universe else 'COMPLETED')
+                'INCOMPLETE' if run.run_type == LIVE_RUN and missing_universe else 'COMPLETED')
             def direction(name):
                 rows = [row for row in episodes if row.setup_state == f'FORMING_{name}']
                 excursions = lambda field: [getattr(row, field) for row in rows
@@ -349,7 +447,12 @@ class HistoricalBaseline:
                     'median_adverse_excursion_percent': _percent(statistics.median(
                         excursions('maximum_adverse_excursion'))) if excursions(
                             'maximum_adverse_excursion') else None}
-            return {'id': run.id, 'period': {'start': run.start_date, 'end': run.end_date},
+            return {'id': run.id, 'run_type': run.run_type,
+                'created_at': _aware(run.created_at).isoformat(),
+                'updated_at': _aware(run.updated_at).isoformat(),
+                'research_universe': list(run.universe_symbols or []),
+                'research_metadata': run.research_metadata or {},
+                'period': {'start': run.start_date, 'end': run.end_date},
                 'strategy_version': run.strategy_version, 'status': report_status,
                 'coverage': {'trading_days': run.trading_days_total,
                     'trading_days_completed': processed_sessions,
@@ -357,7 +460,9 @@ class HistoricalBaseline:
                     'trading_sessions_processed': processed_sessions,
                     'sessions_with_universe_coverage': universe_sessions,
                     'sessions_missing_universe': missing_universe,
+                    'symbol_days_attempted': len(symbol_days),
                     'symbols_evaluated': sum(row.status == 'COMPLETED' for row in symbol_days),
+                    'provider_no_data': sum(row.status == 'NO_DATA' for row in symbol_days),
                     'eligible_evaluations': evaluations,
                     'symbol_failures': sum(row.status == 'FAILED' for row in symbol_days),
                     'limitations': [{'date': day.market_date,
@@ -393,13 +498,16 @@ class HistoricalBaseline:
                 candidates = self.catalog.candidates_for_date(day.isoformat())
                 if not candidates:
                     continue
-                completed = set(session.scalars(select(BaselineSymbolDay.symbol).where(
+                completed = set(session.scalars(select(BaselineSymbolDay.symbol).outerjoin(
+                    BaselineRun, BaselineRun.id == BaselineSymbolDay.baseline_run_id).where(
                     BaselineSymbolDay.market_date == day.isoformat(),
                     BaselineSymbolDay.strategy_version == self.strategy_version,
-                    BaselineSymbolDay.status == 'COMPLETED')))
+                    BaselineSymbolDay.status == 'COMPLETED',
+                    or_(BaselineSymbolDay.baseline_run_id.is_(None),
+                        BaselineRun.run_type == LIVE_RUN))))
                 if any(item['symbol'] not in completed for item in candidates):
                     missing.append(day)
-        return self.execute(missing) if missing else self.report()
+        return self.execute(missing) if missing else self.report(run_type=LIVE_RUN)
 
 
 def make_baseline():
@@ -413,12 +521,15 @@ def main(argv=None):
     parser.add_argument('--start', type=date.fromisoformat)
     parser.add_argument('--end', type=date.fromisoformat)
     parser.add_argument('--last-trading-days', type=int)
+    parser.add_argument('--fixed-universe',
+        help='Comma-separated symbols for FIXED_RESEARCH_UNIVERSE what-if analysis')
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     baseline = make_baseline()
     days = completed_sessions(baseline.calendar, start=args.start, end=args.end,
                               last_trading_days=args.last_trading_days)
-    report = baseline.execute(days)
+    report = (baseline.execute_fixed(args.fixed_universe.split(','), days)
+              if args.fixed_universe else baseline.execute(days))
     coverage = report['coverage']
     log.info('Baseline run=%s status=%s sessions_processed=%s/%s '
         'sessions_with_universe=%s sessions_missing_universe=%s symbols_evaluated=%s '

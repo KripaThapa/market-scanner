@@ -8,17 +8,19 @@ from sqlalchemy.orm import Session
 
 from backend.database.models import (DiscoveryEvent, DiscoveryMembership,
     DiscoverySourceStatus, SymbolMetadata)
+from strategy_lab.market_calendar import USEquityMarketCalendar
 from .domain import AUTOMATIC_SOURCES, DiscoveryItem, SourceType, normalize_symbol
 
 log = logging.getLogger(__name__)
 
 
 class DiscoveryService:
-    def __init__(self, engine, provider, settings, research_settings):
+    def __init__(self, engine, provider, settings, research_settings, *, equity_calendar=None):
         self.engine = engine
         self.provider = provider
         self.settings = settings
         self.research_settings = research_settings
+        self.equity_calendar = equity_calendar or USEquityMarketCalendar()
 
     @staticmethod
     def _record(session, source, items, at, trading_date, provider):
@@ -63,7 +65,14 @@ class DiscoveryService:
             status_rows = {row.source_type: row for row in session.scalars(
                 select(DiscoverySourceStatus))}
         inside = self.research_settings.inside_window(at)
-        if self.settings.enabled and inside:
+        try:
+            is_session = self.equity_calendar.is_session(
+                self.research_settings.local_date(at))
+        except ValueError:
+            is_session = False
+        if self.settings.enabled and inside and not is_session:
+            log.info('Non-XNYS session %s; automatic discovery skipped', trading_date)
+        if self.settings.enabled and inside and is_session:
             for source in AUTOMATIC_SOURCES:
                 status = status_rows.get(source.value)
                 due = (status is None or status.last_attempt_at is None or

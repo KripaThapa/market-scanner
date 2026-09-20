@@ -9,9 +9,10 @@ from alembic import command
 from alembic.config import Config as AlembicConfig
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
-from sqlalchemy import select
+from sqlalchemy import select, text
 
-from backend.database.models import Base, ScanResultModel
+from backend.database.models import (BaselineDay, BaselineRun, BaselineSymbolDay,
+    Base, ScanResultModel)
 from backend.store import Store
 from ripster_scanner.config import Config
 from ripster_scanner.scan import ScanResult
@@ -153,6 +154,44 @@ class WorkerTests(unittest.TestCase):
             differences = compare_metadata(MigrationContext.configure(connection), Base.metadata)
             self.assertEqual(differences, [])
         self.store.check_ready()
+
+    def test_fixed_universe_migration_preserves_existing_baseline_records(self):
+        config = AlembicConfig(str(Path(__file__).resolve().parents[1] / 'alembic.ini'))
+        with self.store.engine.begin() as connection:
+            config.attributes['connection'] = connection
+            command.downgrade(config, '0009')
+            created = '2026-09-20T12:00:00+00:00'
+            run_id = connection.execute(text(
+                'INSERT INTO baseline_runs '
+                '(start_date,end_date,strategy_version,status,trading_days_total,'
+                'trading_days_completed,symbol_failures,created_at,updated_at) '
+                'VALUES (:start,:end,:version,:status,1,1,0,:created,:created) '
+                'RETURNING id'), {'start': '2026-09-18', 'end': '2026-09-18',
+                    'version': 'experimental-forming-v1/b067b3150de3',
+                    'status': 'COMPLETED', 'created': created}).scalar_one()
+            connection.execute(text(
+                'INSERT INTO baseline_days '
+                '(run_id,market_date,status,symbols_total,symbols_completed,symbols_failed,updated_at) '
+                'VALUES (:run,:day,:status,1,1,0,:created)'),
+                {'run': run_id, 'day': '2026-09-18', 'status': 'COMPLETED',
+                 'created': created})
+            symbol_day_id = connection.execute(text(
+                'INSERT INTO baseline_symbol_days '
+                '(market_date,symbol,strategy_version,status,provenance,created_at,updated_at) '
+                'VALUES (:day,:symbol,:version,:status,:provenance,:created,:created) '
+                'RETURNING id'), {'day': '2026-09-18', 'symbol': 'AMD',
+                    'version': 'experimental-forming-v1/b067b3150de3',
+                    'status': 'COMPLETED', 'provenance': '["MOST_ACTIVE"]',
+                    'created': created}).scalar_one()
+            command.upgrade(config, 'head')
+        with self.store.session() as session:
+            run = session.get(BaselineRun, run_id)
+            day = session.scalar(select(BaselineDay).where(BaselineDay.run_id == run_id))
+            symbol_day = session.get(BaselineSymbolDay, symbol_day_id)
+            self.assertEqual(run.run_type, 'LIVE_RECORDED_UNIVERSE')
+            self.assertEqual(run.universe_symbols, [])
+            self.assertEqual(day.status, 'COMPLETED')
+            self.assertEqual((symbol_day.symbol, symbol_day.baseline_run_id), ('AMD', None))
 
 
 if __name__ == '__main__':

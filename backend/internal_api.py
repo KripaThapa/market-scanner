@@ -3,7 +3,7 @@
 Deployment requires separate authentication/authorization before exposing it.
 """
 
-from fastapi import FastAPI, HTTPException, Query, UploadFile
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from typing import Literal
 from pathlib import Path
@@ -47,6 +47,13 @@ class ReplaySeekInput(BaseModel):
 class ReplayObservationInput(BaseModel):
     decision: Literal['NOT_YET', 'INTERESTING', 'WOULD_CONSIDER_ENTRY']
     reason: str = Field(min_length=1, max_length=4000)
+
+
+class FixedBaselineInput(BaseModel):
+    symbols: list[str] = Field(min_length=1, max_length=100)
+    last_trading_days: int | None = Field(default=20, ge=1, le=250)
+    start_date: str | None = Field(default=None, pattern=r'^\d{4}-\d{2}-\d{2}$')
+    end_date: str | None = Field(default=None, pattern=r'^\d{4}-\d{2}-\d{2}$')
 
 
 def create_internal_app(*, store=None, data_dir=None, replay_provider=None):
@@ -130,6 +137,28 @@ def create_internal_app(*, store=None, data_dir=None, replay_provider=None):
         if report is None:
             return {'status': 'NOT_RUN', 'episodes': []}
         return {key: value for key, value in report.items() if key != 'episodes'}
+
+    @app.post('/api/internal/strategy-lab/baseline/fixed-universe', status_code=202)
+    def start_fixed_baseline(body: FixedBaselineInput, background_tasks: BackgroundTasks):
+        from datetime import date
+        from research.baseline import completed_sessions
+
+        def prepare():
+            if body.start_date or body.end_date:
+                if not body.start_date or not body.end_date:
+                    raise ValueError('Both start_date and end_date are required for a date range')
+                days = completed_sessions(equity_calendar, start=date.fromisoformat(body.start_date),
+                    end=date.fromisoformat(body.end_date))
+            else:
+                days = completed_sessions(equity_calendar,
+                    last_trading_days=body.last_trading_days or 20)
+            symbols = baseline().normalize_symbols(body.symbols)
+            run_id = baseline().prepare_fixed(symbols, days)
+            background_tasks.add_task(baseline().execute_fixed, symbols, days, run_id)
+            report = baseline().report(run_id)
+            return {key: value for key, value in report.items() if key != 'episodes'}
+
+        return replay_call(prepare)
 
     @app.get('/api/internal/strategy-lab/baseline/episodes')
     def historical_baseline_episodes(run_id: int | None = Query(default=None, ge=1),
