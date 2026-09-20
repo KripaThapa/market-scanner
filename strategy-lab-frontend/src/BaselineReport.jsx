@@ -75,6 +75,11 @@ export default function BaselineReport() {
         <p>No baseline backfill has been run yet.</p>
       </section>
     );
+  const requested =
+    report.coverage.trading_sessions_requested ?? report.coverage.trading_days;
+  const covered = report.coverage.sessions_with_universe_coverage ?? 0;
+  const missing = report.coverage.sessions_missing_universe ?? 0;
+  const noUniverse = requested > 0 && missing === requested;
   return (
     <div className="baseline-report">
       <header>
@@ -85,6 +90,20 @@ export default function BaselineReport() {
           not a win rate.
         </p>
       </header>
+      {missing > 0 && (
+        <section className="baseline-coverage-warning" role="alert">
+          <h2>
+            {noUniverse
+              ? "Historical universe unavailable"
+              : "Historical universe coverage incomplete"}
+          </h2>
+          <p>
+            {noUniverse
+              ? "This run does not contain sufficient historical universe coverage for strategy evaluation. No symbols were known to the recorded scanner universe during the requested sessions."
+              : `${missing} of ${requested} requested trading sessions have no recorded historical universe. Results cover only sessions with recorded membership.`}
+          </p>
+        </section>
+      )}
       <section className="baseline-summary">
         <div>
           <span>Period</span>
@@ -97,11 +116,16 @@ export default function BaselineReport() {
           <strong>{report.strategy_version}</strong>
         </div>
         <div>
-          <span>Trading days</span>
-          <strong>
-            {report.coverage.trading_days_completed} /{" "}
-            {report.coverage.trading_days}
-          </strong>
+          <span>Sessions requested</span>
+          <strong>{requested}</strong>
+        </div>
+        <div>
+          <span>Sessions with universe</span>
+          <strong>{covered}</strong>
+        </div>
+        <div>
+          <span>Sessions missing universe</span>
+          <strong>{missing}</strong>
         </div>
         <div>
           <span>Symbols evaluated</span>

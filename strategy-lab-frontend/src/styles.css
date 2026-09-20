@@ -37,6 +37,7 @@ main {
 .baseline-report > header,
 .baseline-empty,
 .baseline-summary,
+.baseline-coverage-warning,
 .baseline-direction,
 .episode-list {
   background: #111821;
@@ -44,6 +45,20 @@ main {
   border-radius: 12px;
   padding: 18px;
   margin: 15px 0;
+}
+.baseline-coverage-warning {
+  color: #ffe4b8;
+  background: #302315;
+  border-color: #9a672f;
+}
+.baseline-coverage-warning h2 {
+  margin: 0 0 8px;
+  color: #ffd28c;
+  font-size: 20px;
+}
+.baseline-coverage-warning p {
+  margin: 0;
+  line-height: 1.5;
 }
 .baseline-report > header h1 {
   font-size: 28px;

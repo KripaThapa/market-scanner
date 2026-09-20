@@ -346,6 +346,50 @@ test("private historical baseline shows denominators and episode drilldown", asy
   await expect(page.getByText(/not a win rate/i)).toBeVisible();
 });
 
+test("all missing-universe sessions are reported as unavailable coverage", async ({
+  page,
+}) => {
+  await mockCreationData(page);
+  await page.route("**/api/internal/strategy-lab/baseline", (route) =>
+    route.fulfill({
+      json: {
+        id: 1,
+        status: "INCOMPLETE",
+        period: { start: "2026-08-21", end: "2026-09-18" },
+        strategy_version: "experimental-forming-v1/b067b3150de3",
+        coverage: {
+          trading_days: 20,
+          trading_days_completed: 20,
+          trading_sessions_requested: 20,
+          trading_sessions_processed: 20,
+          sessions_with_universe_coverage: 0,
+          sessions_missing_universe: 20,
+          symbols_evaluated: 0,
+          eligible_evaluations: 0,
+          symbol_failures: 0,
+          limitations: [],
+        },
+        forming_long: { episodes: 0, bars_3: {}, bars_5: {}, bars_10: {} },
+        forming_short: { episodes: 0, bars_3: {}, bars_5: {}, bars_10: {} },
+      },
+    }),
+  );
+  await page.route(
+    "**/api/internal/strategy-lab/baseline/episodes?**",
+    (route) => route.fulfill({ json: { items: [] } }),
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: "Historical baseline" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Historical universe unavailable" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/does not contain sufficient historical universe coverage/i),
+  ).toBeVisible();
+  await expect(page.getByText("Sessions with universe")).toBeVisible();
+  await expect(page.getByText("Sessions missing universe")).toBeVisible();
+});
+
 test("custom equity time, empty-universe manual fallback, and futures separation", async ({
   page,
 }) => {

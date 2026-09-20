@@ -2,16 +2,19 @@
 
 from datetime import date, datetime, timezone
 import unittest
+from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from backend.api import create_app
-from backend.database.models import (BaselineEpisode, BaselineEvaluation,
+from backend.database.models import (BaselineDay, BaselineEpisode, BaselineEvaluation,
     BaselineRun, BaselineSymbolDay, DiscoveryMembership)
 from backend.internal_api import create_internal_app
 from db_support import test_store
 from research.baseline import HistoricalBaseline, completed_sessions
+from ripster_scanner.config import forming_thresholds
+from ripster_scanner.strategy import strategy_version_id
 from strategy_lab.market_calendar import USEquityMarketCalendar
 from test_strategy_lab import MemoryProvider
 
@@ -166,6 +169,49 @@ class BaselineTests(unittest.TestCase):
         self.assertEqual(report['coverage']['symbols_evaluated'], 0)
         self.assertIn('No historical scanner universe',
                       report['coverage']['limitations'][0]['message'])
+
+    def test_twenty_missing_universe_days_are_incomplete_not_covered(self):
+        baseline = self.baseline()
+        class EmptyCatalog:
+            def candidates_for_date(self, trading_date, *, as_of=None):
+                return []
+        baseline.catalog = EmptyCatalog()
+        days = completed_sessions(baseline.calendar, start=date(2026, 8, 21),
+            end=date(2026, 9, 18), now=datetime(2026, 9, 20, tzinfo=UTC))
+        self.assertEqual(len(days), 20)
+        report = baseline.execute(days)
+        coverage = report['coverage']
+        self.assertEqual(report['status'], 'INCOMPLETE')
+        self.assertEqual(coverage['trading_sessions_requested'], 20)
+        self.assertEqual(coverage['trading_sessions_processed'], 20)
+        self.assertEqual(coverage['sessions_with_universe_coverage'], 0)
+        self.assertEqual(coverage['sessions_missing_universe'], 20)
+        self.assertEqual(coverage['symbols_evaluated'], 0)
+        self.assertEqual(coverage['eligible_evaluations'], 0)
+        self.assertEqual(len(coverage['limitations']), 20)
+        with self.store.session() as session:
+            self.assertEqual(session.scalar(select(func.count()).select_from(BaselineDay)
+                .where(BaselineDay.status == 'NO_UNIVERSE')), 20)
+
+    def test_later_discovery_only_enters_baseline_at_first_known_boundary(self):
+        late = datetime(2026, 9, 18, 14, 20, tzinfo=UTC)  # 09:20 CT
+        with self.store.session() as session:
+            session.add(DiscoveryMembership(trading_date=self.day.isoformat(), symbol='LATE',
+                source_type='TOP_GAINER', provider='Fixture', first_seen_at=late,
+                last_seen_at=late, active=True, metrics={}))
+        replay = FakeReplay()
+        report = self.baseline(replay).execute([self.day])
+        late_id = next(key for key, symbol in replay.symbols.items() if symbol == 'LATE')
+        times = [at.astimezone(ZoneInfo('America/Chicago'))
+                 for replay_id, at in replay.moves if replay_id == late_id]
+        self.assertEqual(times[0].strftime('%H:%M'), '09:21')
+        self.assertTrue(all(at >= late for at in times))
+        self.assertEqual(len(times), 14)
+        self.assertEqual(report['forming_long']['episodes'], 1)
+
+    def test_frozen_forming_version_hash_is_unchanged(self):
+        self.assertEqual(strategy_version_id(forming_thresholds()),
+                         'experimental-forming-v1/b067b3150de3')
 
     def test_nightly_catchup_finds_missing_days_in_chronological_order(self):
         baseline = self.baseline()

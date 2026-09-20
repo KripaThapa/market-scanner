@@ -107,41 +107,50 @@ class HistoricalBaseline:
 
     def _day(self, run_id, day, day_number, total_days):
         day_text = day.isoformat()
-        candidates = self.catalog.candidates_for_date(day_text)
         now = datetime.now(timezone.utc)
         with Session(self.engine) as session, session.begin():
             row = session.scalar(select(BaselineDay).where(
                 BaselineDay.run_id == run_id, BaselineDay.market_date == day_text))
             if row is None:
                 row = BaselineDay(run_id=run_id, market_date=day_text,
-                    status='PENDING', symbols_total=len(candidates), symbols_completed=0,
+                    status='PENDING', symbols_total=0, symbols_completed=0,
                     symbols_failed=0, updated_at=now)
                 session.add(row)
-            row.symbols_total = len(candidates)
-            if not candidates:
-                row.status = 'NO_UNIVERSE'
-                row.coverage_limitation = 'No historical scanner universe was recorded for this date.'
             row.updated_at = now
-        self.progress(f'Trading days: {day_number} / {total_days}\nCurrent date: {day_text}')
-        if not candidates:
-            self._refresh_run(run_id)
-            return
-        for number, candidate in enumerate(candidates, 1):
-            try:
-                self._symbol(day, candidate)
-            except Exception as exc:
-                self._fail_symbol(day_text, candidate, exc)
-                log.warning('Baseline %s %s failed: %s', day_text, candidate['symbol'], exc)
-            counts = self._day_counts(day_text)
-            self.progress(f'Symbols: {number} / {len(candidates)} · '
-                          f'FORMING episodes: LONG {counts["long"]} SHORT {counts["short"]} · '
-                          f'Failures: {counts["failed"]}')
+
+        start = datetime.combine(day, time(8, 33), CT)
+        end = datetime.combine(day, time(10, 0), CT)
+        seen = set()
+        cursor = start
+        while cursor <= end:
+            candidates = self.catalog.candidates_for_date(day_text, as_of=cursor)
+            fresh = [candidate for candidate in candidates
+                     if candidate['symbol'] not in seen]
+            for candidate in fresh:
+                seen.add(candidate['symbol'])
+                try:
+                    self._symbol(day, candidate, start_at=cursor)
+                except Exception as exc:
+                    self._fail_symbol(day_text, candidate, exc)
+                    log.warning('Baseline %s %s failed: %s', day_text, candidate['symbol'], exc)
+            self.progress(f'Trading sessions: {day_number} / {total_days}\n'
+                          f'Current date: {day_text}\n'
+                          f'Symbols eligible by {cursor.strftime("%H:%M")} CT: {len(seen)}')
+            cursor += timedelta(minutes=3)
+
         with Session(self.engine) as session, session.begin():
             row = session.scalar(select(BaselineDay).where(
                 BaselineDay.run_id == run_id, BaselineDay.market_date == day_text))
-            counts = self._day_counts(day_text, session=session)
-            row.symbols_completed, row.symbols_failed = counts['completed'], counts['failed']
-            row.status = 'COMPLETED_WITH_FAILURES' if counts['failed'] else 'COMPLETED'
+            row.symbols_total = len(seen)
+            if not seen:
+                row.status = 'NO_UNIVERSE'
+                row.coverage_limitation = (
+                    'No historical scanner universe was recorded during the baseline window.')
+            else:
+                row.coverage_limitation = None
+                counts = self._day_counts(day_text, session=session)
+                row.symbols_completed, row.symbols_failed = counts['completed'], counts['failed']
+                row.status = 'COMPLETED_WITH_FAILURES' if counts['failed'] else 'COMPLETED'
             row.updated_at = datetime.now(timezone.utc)
         self._refresh_run(run_id)
 
@@ -158,7 +167,7 @@ class HistoricalBaseline:
                     clock.sleep(self.retry_delay * attempt)
         raise error
 
-    def _symbol(self, day, candidate):
+    def _symbol(self, day, candidate, *, start_at=None):
         day_text, symbol = day.isoformat(), candidate['symbol']
         now = datetime.now(timezone.utc)
         with Session(self.engine) as session, session.begin():
@@ -184,7 +193,7 @@ class HistoricalBaseline:
             with Session(self.engine) as session, session.begin():
                 item = session.get(BaselineSymbolDay, symbol_day_id)
                 item.replay_id, item.updated_at = replay_id, datetime.now(timezone.utc)
-        cursor = datetime.combine(day, time(8, 33), CT)
+        cursor = start_at or datetime.combine(day, time(8, 33), CT)
         end = datetime.combine(day, time(10, 0), CT)
         while cursor <= end:
             self._evaluate(symbol_day_id, replay_id, day, cursor)
@@ -289,10 +298,15 @@ class HistoricalBaseline:
         with Session(self.engine) as session, session.begin():
             run = session.get(BaselineRun, run_id)
             days = session.scalars(select(BaselineDay).where(BaselineDay.run_id == run_id)).all()
-            complete = {'COMPLETED', 'COMPLETED_WITH_FAILURES', 'NO_UNIVERSE'}
-            run.trading_days_completed = sum(day.status in complete for day in days)
+            terminal = {'COMPLETED', 'COMPLETED_WITH_FAILURES', 'NO_UNIVERSE'}
+            run.trading_days_completed = sum(day.status in terminal for day in days)
             run.symbol_failures = sum(day.symbols_failed for day in days)
-            run.status = 'COMPLETED' if run.trading_days_completed == run.trading_days_total else 'IN_PROGRESS'
+            if run.trading_days_completed != run.trading_days_total:
+                run.status = 'IN_PROGRESS'
+            elif any(day.status == 'NO_UNIVERSE' for day in days):
+                run.status = 'INCOMPLETE'
+            else:
+                run.status = 'COMPLETED'
             run.updated_at = datetime.now(timezone.utc)
 
     def report(self, run_id=None):
@@ -310,9 +324,17 @@ class HistoricalBaseline:
                 BaselineEpisode.symbol_day_id.in_(ids)).order_by(
                     BaselineEpisode.first_forming_at)).all() if ids else []
             evaluations = session.scalar(select(func.count()).select_from(
-                BaselineEvaluation).where(BaselineEvaluation.symbol_day_id.in_(ids))) if ids else 0
+                BaselineEvaluation).where(BaselineEvaluation.symbol_day_id.in_(ids),
+                    BaselineEvaluation.decision_eligible.is_(True))) if ids else 0
             days = session.scalars(select(BaselineDay).where(BaselineDay.run_id == run.id).order_by(
                 BaselineDay.market_date)).all()
+            terminal = {'COMPLETED', 'COMPLETED_WITH_FAILURES', 'NO_UNIVERSE'}
+            missing_universe = sum(day.status == 'NO_UNIVERSE' for day in days)
+            processed_sessions = sum(day.status in terminal for day in days)
+            universe_sessions = sum(day.status != 'NO_UNIVERSE' and day.symbols_total > 0
+                                    for day in days)
+            report_status = ('IN_PROGRESS' if processed_sessions < run.trading_days_total else
+                'INCOMPLETE' if missing_universe else 'COMPLETED')
             def direction(name):
                 rows = [row for row in episodes if row.setup_state == f'FORMING_{name}']
                 excursions = lambda field: [getattr(row, field) for row in rows
@@ -328,9 +350,13 @@ class HistoricalBaseline:
                         excursions('maximum_adverse_excursion'))) if excursions(
                             'maximum_adverse_excursion') else None}
             return {'id': run.id, 'period': {'start': run.start_date, 'end': run.end_date},
-                'strategy_version': run.strategy_version, 'status': run.status,
+                'strategy_version': run.strategy_version, 'status': report_status,
                 'coverage': {'trading_days': run.trading_days_total,
-                    'trading_days_completed': run.trading_days_completed,
+                    'trading_days_completed': processed_sessions,
+                    'trading_sessions_requested': run.trading_days_total,
+                    'trading_sessions_processed': processed_sessions,
+                    'sessions_with_universe_coverage': universe_sessions,
+                    'sessions_missing_universe': missing_universe,
                     'symbols_evaluated': sum(row.status == 'COMPLETED' for row in symbol_days),
                     'eligible_evaluations': evaluations,
                     'symbol_failures': sum(row.status == 'FAILED' for row in symbol_days),
@@ -393,10 +419,15 @@ def main(argv=None):
     days = completed_sessions(baseline.calendar, start=args.start, end=args.end,
                               last_trading_days=args.last_trading_days)
     report = baseline.execute(days)
-    log.info('Baseline complete: run=%s days=%s/%s long=%s short=%s failures=%s',
-        report['id'], report['coverage']['trading_days_completed'],
-        report['coverage']['trading_days'], report['forming_long']['episodes'],
-        report['forming_short']['episodes'], report['coverage']['symbol_failures'])
+    coverage = report['coverage']
+    log.info('Baseline run=%s status=%s sessions_processed=%s/%s '
+        'sessions_with_universe=%s sessions_missing_universe=%s symbols_evaluated=%s '
+        'eligible_evaluations=%s long_episodes=%s short_episodes=%s failures=%s',
+        report['id'], report['status'], coverage['trading_sessions_processed'],
+        coverage['trading_sessions_requested'], coverage['sessions_with_universe_coverage'],
+        coverage['sessions_missing_universe'], coverage['symbols_evaluated'],
+        coverage['eligible_evaluations'], report['forming_long']['episodes'],
+        report['forming_short']['episodes'], coverage['symbol_failures'])
 
 
 if __name__ == '__main__':

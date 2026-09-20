@@ -6,8 +6,8 @@ import unittest
 from fastapi.testclient import TestClient
 import pandas as pd
 
-from backend.database.models import (DiscoveryMembership, ResearchObservation,
-                                     StrategyVersion, WatchlistUpload)
+from backend.database.models import (ActiveUniverseMember, DiscoveryMembership,
+    ResearchObservation, StrategyVersion, WatchlistSymbol, WatchlistUpload)
 from backend.internal_api import create_internal_app
 from db_support import test_store
 from strategy_lab.catalog import HistoricalUniverseRepository
@@ -84,6 +84,53 @@ class StrategyLabCreationUxTests(unittest.TestCase):
         self.assertEqual(result['symbols'], ['AMD', 'MSFT', 'NVDA', 'TSLA'])
         self.assertNotIn('FUTR', str(result))
         self.assertNotIn('return', str(result).lower())
+
+    def test_historical_universe_is_bounded_by_source_known_at_timestamps(self):
+        early = datetime(2026, 9, 18, 13, 30, tzinfo=UTC)
+        late = datetime(2026, 9, 18, 14, 20, tzinfo=UTC)
+        with self.store.session() as session:
+            for symbol, first_seen in (('EARLY', early), ('LATE', late)):
+                session.add(DiscoveryMembership(trading_date='2026-09-18', symbol=symbol,
+                    source_type='MOST_ACTIVE', provider='Fixture', first_seen_at=first_seen,
+                    last_seen_at=first_seen, active=True, metrics={}))
+        catalog = HistoricalUniverseRepository(self.store.engine)
+        before_late = catalog.candidates_for_date('2026-09-18', as_of=late.replace(minute=19))
+        at_late = catalog.candidates_for_date('2026-09-18', as_of=late)
+        self.assertEqual([row['symbol'] for row in before_late], ['EARLY'])
+        self.assertEqual([row['symbol'] for row in at_late], ['EARLY', 'LATE'])
+
+    def test_observations_and_uploaded_watchlist_use_their_known_at_timestamps(self):
+        self.seed_universe()
+        catalog = HistoricalUniverseRepository(self.store.engine)
+        before_observation = catalog.candidates_for_date('2026-09-18',
+            as_of=datetime(2026, 9, 18, 13, 59, tzinfo=UTC))
+        self.assertEqual(before_observation, [])
+        at_observation = catalog.candidates_for_date('2026-09-18',
+            as_of=datetime(2026, 9, 18, 14, 0, tzinfo=UTC))
+        self.assertEqual([row['symbol'] for row in at_observation],
+                         ['AMD', 'MSFT', 'NVDA', 'TSLA'])
+
+    def test_active_universe_uses_validated_upload_time_not_later_publication(self):
+        upload_at = datetime(2026, 9, 18, 13, 0, tzinfo=UTC)
+        validated_at = datetime(2026, 9, 18, 13, 10, tzinfo=UTC)
+        published_at = datetime(2026, 9, 18, 13, 30, tzinfo=UTC)
+        with self.store.session() as session:
+            upload = WatchlistUpload(date='2026-09-18', source='image',
+                uploaded_at=upload_at, processing_status='scanned',
+                candidate_count=1, validated_count=1, candidates=['UPLD'])
+            session.add(upload)
+            session.flush()
+            session.add(WatchlistSymbol(watchlist_upload_id=upload.id, symbol='UPLD',
+                validation_status='validated', created_at=validated_at))
+            session.add(ActiveUniverseMember(snapshot_id=upload.id, symbol='UPLD',
+                sources=['UPLOADED_WATCHLIST'], source_metrics={}, sector='UNKNOWN',
+                candle_state=None, decision_eligible=False, updated_at=published_at))
+        catalog = HistoricalUniverseRepository(self.store.engine)
+        before = catalog.candidates_for_date('2026-09-18', as_of=upload_at)
+        known = catalog.candidates_for_date('2026-09-18', as_of=validated_at)
+        self.assertEqual(before, [])
+        self.assertEqual([row['symbol'] for row in known], ['UPLD'])
+        self.assertEqual(known[0]['sources'], ['UPLOADED_WATCHLIST'])
 
     def test_empty_historical_universe_and_private_api_boundary(self):
         private = TestClient(create_internal_app(store=self.store,
