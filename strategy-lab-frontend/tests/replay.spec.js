@@ -218,14 +218,23 @@ test("Daily Watchlist stages extracted symbols for review and activates on confi
     route.fulfill({
       status: 202,
       json: {
-        status: "ready_for_review",
+        status: "processing",
         snapshot_id: 41,
-        validated_count: 2,
-        validated_symbols: ["NVDA", "AMD"],
-        candidates: ["NVDA", "AMD"],
-        rejection_details: [],
       },
     }),
+  );
+  await page.route(
+    "**/api/internal/strategy-lab/watchlist/uploads/41",
+    (route) =>
+      route.fulfill({
+        json: {
+          status: "ready_for_review",
+          snapshot_id: 41,
+          validated_symbols: ["NVDA", "AMD"],
+          candidates: ["NVDA", "AMD"],
+          rejection_details: [],
+        },
+      }),
   );
   await page.route(
     "**/api/internal/strategy-lab/watchlist/activate",
@@ -273,6 +282,51 @@ test("Daily Watchlist stages extracted symbols for review and activates on confi
   await expect(
     page.getByText("It will be included on the scanner's next normal cycle."),
   ).toBeVisible();
+});
+
+test("Daily Watchlist stops polling when processing fails", async ({
+  page,
+}) => {
+  let statusRequests = 0;
+  await page.route("**/api/internal/strategy-lab/capabilities", (route) =>
+    route.fulfill({ json: { asset_types: { FUTURE: { supported: false } } } }),
+  );
+  await page.route("**/api/internal/strategy-lab/watchlist/today", (route) =>
+    route.fulfill({ json: { date: "2026-09-21", active: null } }),
+  );
+  await page.route("**/api/internal/strategy-lab/watchlist/upload", (route) =>
+    route.fulfill({
+      status: 202,
+      json: { snapshot_id: 77, status: "processing" },
+    }),
+  );
+  await page.route(
+    "**/api/internal/strategy-lab/watchlist/uploads/77",
+    (route) => {
+      statusRequests += 1;
+      return route.fulfill({
+        json: {
+          snapshot_id: 77,
+          status: "failed",
+          error: "Watchlist processing failed.",
+        },
+      });
+    },
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: "Daily Watchlist" }).click();
+  await page.getByLabel("Upload Screenshot").setInputFiles({
+    name: "failed.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("fixture"),
+  });
+  await page
+    .getByRole("region", { name: "Daily Watchlist" })
+    .locator('button[type="submit"]')
+    .click();
+  await expect(page.getByText("Watchlist processing failed.")).toBeVisible();
+  await page.waitForTimeout(2200);
+  expect(statusRequests).toBe(1);
 });
 
 test("Rules tab separates active FORMING rules from non-filtering proposals", async ({

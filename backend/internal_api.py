@@ -8,6 +8,9 @@ from pydantic import BaseModel, Field
 from typing import Literal
 from pathlib import Path
 import os
+import logging
+import time
+import asyncio
 
 from backend.store import Store
 from backend.rules_catalog import strategy_lab_rules_catalog
@@ -15,11 +18,15 @@ from research.config import load_settings
 from research.repository import ResearchRepository
 from backend.service import BusyError, ImportFailed, ImportService
 from backend.uploads import save_image, UploadBoundary
+from backend.watchlist_worker import WatchlistProcessor
 from strategy_lab.domain import (MarketClosed, ReplayDataUnavailable,
                                  ReplayDateUnavailable)
 from strategy_lab.catalog import HistoricalUniverseRepository
 from strategy_lab.market_calendar import USEquityMarketCalendar
 from strategy_lab.service import StrategyLabService
+
+
+log = logging.getLogger(__name__)
 
 
 class RuleProposalInput(BaseModel):
@@ -61,7 +68,8 @@ class WatchlistActivationInput(BaseModel):
     snapshot_id: int = Field(ge=1)
 
 
-def create_internal_app(*, store=None, data_dir=None, replay_provider=None):
+def create_internal_app(*, store=None, data_dir=None, replay_provider=None,
+                        start_watchlist_processor=True):
     store = store or Store()
     research = ResearchRepository(store.engine)
     replay_catalog = HistoricalUniverseRepository(store.engine)
@@ -69,9 +77,34 @@ def create_internal_app(*, store=None, data_dir=None, replay_provider=None):
     app = FastAPI(title='Market Scanner Internal Research')
     app.add_middleware(UploadBoundary)
     import_service = ImportService(store)
+    watchlist_processor = WatchlistProcessor(store)
+    processor_task = None
     upload_dir = Path(data_dir or os.getenv('RIPSTER_DATA_DIR', 'data')) / 'uploads'
     lab_instance = None
     baseline_instance = None
+
+    async def process_watchlist_loop():
+        while True:
+            try:
+                await asyncio.to_thread(watchlist_processor.process_once)
+            except Exception:
+                log.warning('watchlist_import processor cycle failed; will retry')
+            await asyncio.sleep(2)
+
+    @app.on_event('startup')
+    async def start_watchlist_processing():
+        nonlocal processor_task
+        if start_watchlist_processor:
+            processor_task = asyncio.create_task(process_watchlist_loop())
+
+    @app.on_event('shutdown')
+    async def stop_watchlist_processing():
+        if processor_task is not None:
+            processor_task.cancel()
+            try:
+                await processor_task
+            except asyncio.CancelledError:
+                pass
 
     def lab():
         nonlocal lab_instance
@@ -232,10 +265,18 @@ def create_internal_app(*, store=None, data_dir=None, replay_provider=None):
 
     def process_upload(file, *, activate):
         path = None
+        started = time.perf_counter()
+        log.info('watchlist_upload stage=started filename_present=%s activate=%s',
+                 bool(file.filename), activate)
         try:
+            save_started = time.perf_counter()
             path, filename = save_image(file, upload_dir)
+            log.info('watchlist_upload stage=image_saved filename=%s elapsed_ms=%.1f',
+                     filename, (time.perf_counter() - save_started) * 1000)
             return import_service.import_image(path, filename, activate=activate)
         except BusyError:
+            log.info('watchlist_upload stage=failed failed_stage=lock elapsed_ms=%.1f',
+                     (time.perf_counter() - started) * 1000)
             if path:
                 path.unlink(missing_ok=True)
             raise HTTPException(409, 'Another import is in progress') from None
@@ -243,6 +284,10 @@ def create_internal_app(*, store=None, data_dir=None, replay_provider=None):
             report = exc.report or {}
             raise HTTPException(422 if report and not report.get('validated_count') else 502,
                                 {'message': 'Watchlist import failed', 'report': report}) from None
+        except Exception:
+            log.info('watchlist_upload stage=failed failed_stage=image_save elapsed_ms=%.1f',
+                     (time.perf_counter() - started) * 1000)
+            raise
         finally:
             file.file.close()
 
@@ -251,9 +296,43 @@ def create_internal_app(*, store=None, data_dir=None, replay_provider=None):
         return {'date': store.today_date(),
                 'active': store.today_active_uploaded_snapshot()}
 
+    @app.get('/api/internal/strategy-lab/watchlist/uploads/{snapshot_id}')
+    def watchlist_upload_status(snapshot_id: int):
+        upload = store.upload_status(snapshot_id)
+        if upload is None or upload['source'] != 'image':
+            raise HTTPException(404, 'Watchlist upload not found')
+        payload = {'snapshot_id': upload['id'], 'status': upload['status']}
+        if upload['status'] == 'ready_for_review':
+            payload.update({'validated_symbols': upload['symbols'],
+                            'candidates': upload['candidates'],
+                            'rejected': [item['candidate'] for item in upload['rejected']],
+                            'rejection_details': upload['rejected']})
+        elif upload['status'] == 'failed':
+            payload['error'] = upload['error'] or 'Watchlist processing failed.'
+        return payload
+
     @app.post('/api/internal/strategy-lab/watchlist/upload', status_code=202)
     def stage_watchlist(file: UploadFile):
-        return process_upload(file, activate=False)
+        path = None
+        started = time.perf_counter()
+        log.info('watchlist_upload stage=started filename_present=%s activate=false', bool(file.filename))
+        try:
+            save_started = time.perf_counter()
+            path, filename = save_image(file, upload_dir)
+            log.info('watchlist_upload stage=image_saved filename=%s elapsed_ms=%.1f',
+                     filename, (time.perf_counter() - save_started) * 1000)
+            snapshot_id = store.snapshot((), source='image', filename=filename, image_path=str(path))
+            log.info('watchlist_upload stage=processing_accepted snapshot_id=%s elapsed_ms=%.1f',
+                     snapshot_id, (time.perf_counter() - started) * 1000)
+            return {'snapshot_id': snapshot_id, 'status': 'processing'}
+        except Exception:
+            if path:
+                path.unlink(missing_ok=True)
+            log.info('watchlist_upload stage=failed failed_stage=enqueue elapsed_ms=%.1f',
+                     (time.perf_counter() - started) * 1000)
+            raise
+        finally:
+            file.file.close()
 
     @app.post('/api/internal/strategy-lab/watchlist/activate')
     def activate_watchlist(body: WatchlistActivationInput):

@@ -2,6 +2,7 @@
 
 from io import BytesIO
 from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
 import tempfile
 import shutil
@@ -14,9 +15,10 @@ from sqlalchemy import func, select
 
 from backend.api import create_app
 from backend.internal_api import create_internal_app
-from backend.database.models import Alert, FormingSetup, ScanResultModel, WatchlistSymbol
+from backend.database.models import Alert, FormingSetup, ScanResultModel, WatchlistSymbol, WatchlistUpload
 from backend.store import Store, now
 from backend.uploads import MAX_UPLOAD
+from backend.watchlist_worker import WatchlistProcessor
 from ripster_scanner.config import Config
 from ripster_scanner.scan import ScanResult
 from ripster_scanner.forming import FormingResult, SetupState
@@ -290,6 +292,14 @@ class APITests(unittest.TestCase):
             'file': ('daily.png', image_bytes(), 'image/png')})
         self.assertEqual(staged.status_code, 202, staged.text)
         report = staged.json()
+        self.assertEqual(report, {'snapshot_id': report['snapshot_id'], 'status': 'processing'})
+        self.assertEqual(self.internal_client.get(
+            f"/api/internal/strategy-lab/watchlist/uploads/{report['snapshot_id']}"
+        ).json()['status'], 'processing')
+        self.assertTrue(WatchlistProcessor(self.store).process_once())
+        report = self.internal_client.get(
+            f"/api/internal/strategy-lab/watchlist/uploads/{report['snapshot_id']}"
+        ).json()
         self.assertEqual(report['status'], 'ready_for_review')
         self.assertEqual(report['validated_symbols'], ['NVDA', 'AMD'])
         self.assertIsNone(self.store.today_active_uploaded_snapshot())
@@ -305,6 +315,7 @@ class APITests(unittest.TestCase):
             'file': ('later.png', image_bytes(), 'image/png')})
         self.assertEqual(replacement.status_code, 202)
         second = replacement.json()
+        self.assertTrue(WatchlistProcessor(self.store).process_once())
         self.assertEqual(self.store.today_active_uploaded_snapshot()['id'], first_upload_id)
         self.assertEqual(self.internal_client.post('/api/internal/strategy-lab/watchlist/activate',
             json={'snapshot_id': second['snapshot_id']}).status_code, 200)
@@ -319,8 +330,41 @@ class APITests(unittest.TestCase):
         # Current OCR/import response exposes validated symbols, not note associations.
         self.assertEqual(report['validated_symbols'], ['NVDA', 'AMD'])
 
+    def test_staged_upload_is_durable_and_processor_recovery_is_idempotent(self):
+        mocks = self.mock_import(tokens=[OCRToken('NVDA', 99)])
+        staged = self.internal_client.post('/api/internal/strategy-lab/watchlist/upload', files={
+            'file': ('daily.png', image_bytes(), 'image/png')})
+        self.assertEqual(staged.status_code, 202)
+        snapshot_id = staged.json()['snapshot_id']
+        mocks['extract_image_tokens'].assert_not_called()
+        first = self.store.claim_processing_upload()
+        self.assertEqual(first['id'], snapshot_id)
+        self.assertIsNone(self.store.claim_processing_upload())
+        # A restart can recover an expired claim, while a completed upload cannot.
+        with self.store.session() as session:
+            upload = session.get(WatchlistUpload, snapshot_id)
+            upload.processing_claimed_at = upload.processing_claimed_at - timedelta(minutes=11)
+        self.assertTrue(WatchlistProcessor(self.store).process_once())
+        ready = self.internal_client.get(
+            f'/api/internal/strategy-lab/watchlist/uploads/{snapshot_id}')
+        self.assertEqual(ready.json()['status'], 'ready_for_review')
+        self.assertFalse(WatchlistProcessor(self.store).process_once())
+
+    def test_staged_upload_failure_is_persisted_and_sanitized(self):
+        self.mock_import()
+        snapshot = self.internal_client.post('/api/internal/strategy-lab/watchlist/upload', files={
+            'file': ('daily.png', image_bytes(), 'image/png')}).json()
+        with patch('backend.service.fetch_active_symbols', side_effect=RuntimeError('secret-provider-detail')):
+            self.assertTrue(WatchlistProcessor(self.store).process_once())
+        response = self.internal_client.get(
+            f"/api/internal/strategy-lab/watchlist/uploads/{snapshot['snapshot_id']}")
+        self.assertEqual(response.json()['status'], 'failed')
+        self.assertIn('Watchlist processing failed', response.json()['error'])
+        self.assertNotIn('secret-provider-detail', response.text)
+
     def test_daily_watchlist_remains_private(self):
         self.assertEqual(self.client.get('/api/internal/strategy-lab/watchlist/today').status_code, 404)
+        self.assertEqual(self.client.get('/api/internal/strategy-lab/watchlist/uploads/1').status_code, 404)
         self.assertEqual(self.client.post('/api/internal/strategy-lab/watchlist/upload').status_code, 404)
         self.assertEqual(self.client.post('/api/internal/strategy-lab/watchlist/activate',
             json={'snapshot_id': 1}).status_code, 404)
@@ -375,6 +419,21 @@ class APITests(unittest.TestCase):
         self.assertNotIn('private backend path', response.text)
         self.assertEqual(self.store.latest_upload()['filename'], 'watchlist.png')
         self.assertEqual(self.store.latest_upload()['status'], 'failed')
+
+    def test_watchlist_import_logs_stage_timings_without_payloads(self):
+        self.mock_import(tokens=[OCRToken('NVDA', 99)])
+        with self.assertLogs('backend.service', level='INFO') as captured:
+            response = self.upload()
+        self.assertEqual(response.status_code, 202)
+        output = '\n'.join(captured.output)
+        for stage in ('started', 'snapshot_created', 'ocr_started', 'ocr_completed',
+                      'provider_directory_started', 'provider_directory_completed',
+                      'candidate_validation_completed', 'database_update_completed',
+                      'completed'):
+            self.assertIn(f'stage={stage}', output)
+        self.assertIn('token_count=1', output)
+        self.assertIn('validated_count=1', output)
+        self.assertNotIn('secret-api', output)
 
     def test_unsupported_spoofed_and_oversized_uploads(self):
         for filename, data, mime, status in [

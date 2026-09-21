@@ -16,6 +16,45 @@ export default function DailyWatchlist() {
     refresh().catch((failure) => setError(failure.message));
   }, []);
 
+  useEffect(() => {
+    const savedId = window.localStorage.getItem("dailyWatchlistSnapshotId");
+    if (savedId) {
+      setPending({ snapshot_id: Number(savedId), status: "processing" });
+    }
+  }, []);
+
+  useEffect(() => {
+    const snapshotId = pending?.snapshot_id;
+    if (!snapshotId || pending.status !== "processing") return undefined;
+    let cancelled = false;
+    let timer;
+    const poll = async () => {
+      try {
+        const result = await request(
+          `/api/internal/strategy-lab/watchlist/uploads/${snapshotId}`,
+        );
+        if (cancelled) return;
+        setPending(result);
+        if (result.status === "processing") timer = setTimeout(poll, 2000);
+      } catch (failure) {
+        if (!cancelled) {
+          setError(failure.message);
+          if (failure.status === 404) {
+            window.localStorage.removeItem("dailyWatchlistSnapshotId");
+            setPending(null);
+            return;
+          }
+          timer = setTimeout(poll, 2000);
+        }
+      }
+    };
+    poll();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [pending?.snapshot_id, pending?.status]);
+
   const upload = async (event) => {
     event.preventDefault();
     const file = event.currentTarget.elements.screenshot.files[0];
@@ -29,6 +68,10 @@ export default function DailyWatchlist() {
       const result = await request(
         "/api/internal/strategy-lab/watchlist/upload",
         { method: "POST", body },
+      );
+      window.localStorage.setItem(
+        "dailyWatchlistSnapshotId",
+        String(result.snapshot_id),
       );
       setPending(result);
     } catch (failure) {
@@ -52,6 +95,7 @@ export default function DailyWatchlist() {
         },
       );
       setToday({ date: result.active.date, active: result.active });
+      window.localStorage.removeItem("dailyWatchlistSnapshotId");
       setPending(null);
     } catch (failure) {
       setError(failure.details?.message || failure.message);
@@ -102,7 +146,19 @@ export default function DailyWatchlist() {
         </p>
       )}
 
-      {pending && (
+      {pending?.status === "processing" && (
+        <p className="daily-watchlist-processing" role="status">
+          Processing screenshot…
+        </p>
+      )}
+
+      {pending?.status === "failed" && (
+        <p className="daily-watchlist-error" role="alert">
+          {pending.error || "Watchlist processing failed."}
+        </p>
+      )}
+
+      {pending?.status === "ready_for_review" && (
         <section
           className="daily-watchlist-review"
           aria-labelledby="extracted-title"

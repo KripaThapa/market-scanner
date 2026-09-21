@@ -1,11 +1,11 @@
 """SQLAlchemy repository shared by the API and worker. Production uses PostgreSQL."""
 
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import math
 import threading
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, or_, select, text
 from sqlalchemy.orm import Session
 
 from .database.config import make_engine
@@ -103,11 +103,42 @@ class Store:
             self._symbols(session, upload.id, symbols, rejected, timestamp)
             return upload.id
 
+    def claim_processing_upload(self, *, stale_after=timedelta(minutes=10)):
+        """Claim one durable image import, recovering an expired claim safely."""
+        current = now()
+        cutoff = current - stale_after
+        with self.session() as session:
+            upload = session.scalar(
+                select(WatchlistUpload).where(
+                    WatchlistUpload.source == 'image',
+                    WatchlistUpload.processing_status == 'processing',
+                    or_(WatchlistUpload.processing_claimed_at.is_(None),
+                        WatchlistUpload.processing_claimed_at < cutoff),
+                ).order_by(WatchlistUpload.uploaded_at, WatchlistUpload.id)
+                .with_for_update(skip_locked=True).limit(1)
+            )
+            if upload is None:
+                return None
+            recovered = upload.processing_claimed_at is not None
+            upload.processing_claimed_at = current
+            upload.processing_attempts = (upload.processing_attempts or 0) + 1
+            return {
+                'id': upload.id,
+                'filename': upload.original_filename,
+                'image_path': upload.stored_filename,
+                'attempt': upload.processing_attempts,
+                'recovered': recovered,
+            }
+
     @staticmethod
     def today_date():
         return now().date().isoformat()
 
     def current_snapshot_for_activation(self, snapshot_id):
+        with self.session() as session:
+            return self.snapshot_dict(session, session.get(WatchlistUpload, snapshot_id))
+
+    def upload_status(self, snapshot_id):
         with self.session() as session:
             return self.snapshot_dict(session, session.get(WatchlistUpload, snapshot_id))
 
@@ -129,6 +160,7 @@ class Store:
             upload.candidate_count = len(imported.candidates)
             upload.validated_count = len(imported.validated)
             upload.processed_at = now()
+            upload.processing_claimed_at = None
             upload.processing_status = 'ready_for_review'
             self._symbols(session, snapshot_id, imported.validated,
                           [asdict(item) for item in imported.rejected], now())
@@ -155,6 +187,7 @@ class Store:
             upload.processing_status = 'failed'
             upload.error = error
             upload.processed_at = now()
+            upload.processing_claimed_at = None
 
     @staticmethod
     def snapshot_dict(session, upload):

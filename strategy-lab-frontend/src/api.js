@@ -15,6 +15,7 @@ export async function request(path, options = {}) {
         : detail?.message || `Request failed (${response.status})`,
     );
     error.details = typeof detail === "object" ? detail : null;
+    error.status = response.status;
     throw error;
   }
   return body;

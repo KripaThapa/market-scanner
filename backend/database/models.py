@@ -18,6 +18,8 @@ class WatchlistUpload(Base):
     stored_filename: Mapped[str | None] = mapped_column(Text)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    processing_claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    processing_attempts: Mapped[int] = mapped_column(Integer, default=0)
     processing_status: Mapped[str] = mapped_column(String(30))
     candidate_count: Mapped[int] = mapped_column(Integer, default=0)
     validated_count: Mapped[int] = mapped_column(Integer, default=0)
