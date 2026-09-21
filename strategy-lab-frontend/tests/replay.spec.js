@@ -204,6 +204,159 @@ test("private replay advances visually, saves free text, and reveals only explic
   ).toBeVisible();
 });
 
+test("Daily Watchlist stages extracted symbols for review and activates on confirmation", async ({
+  page,
+}) => {
+  let active = null;
+  await page.route("**/api/internal/strategy-lab/capabilities", (route) =>
+    route.fulfill({ json: { asset_types: { FUTURE: { supported: false } } } }),
+  );
+  await page.route("**/api/internal/strategy-lab/watchlist/today", (route) =>
+    route.fulfill({ json: { date: "2026-09-21", active } }),
+  );
+  await page.route("**/api/internal/strategy-lab/watchlist/upload", (route) =>
+    route.fulfill({
+      status: 202,
+      json: {
+        status: "ready_for_review",
+        snapshot_id: 41,
+        validated_count: 2,
+        validated_symbols: ["NVDA", "AMD"],
+        candidates: ["NVDA", "AMD"],
+        rejection_details: [],
+      },
+    }),
+  );
+  await page.route(
+    "**/api/internal/strategy-lab/watchlist/activate",
+    async (route) => {
+      active = {
+        id: 41,
+        date: "2026-09-21",
+        validated_count: 2,
+        symbols: ["NVDA", "AMD"],
+      };
+      await route.fulfill({
+        json: {
+          active,
+          message:
+            "Today's watchlist is active and will be included on the scanner's next normal cycle.",
+        },
+      });
+    },
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: "Daily Watchlist" }).click();
+  await expect(page.getByText("Today: 2026-09-21")).toBeVisible();
+  await page.getByLabel("Upload Screenshot").setInputFiles({
+    name: "watchlist.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("fixture"),
+  });
+  await page
+    .getByRole("region", { name: "Daily Watchlist" })
+    .locator('button[type="submit"]')
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Extracted Watchlist" }),
+  ).toBeVisible();
+  await expect(page.getByRole("cell", { name: "NVDA" })).toBeVisible();
+  await expect(
+    page.getByText("Not captured by the current screenshot extractor").first(),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Confirm & Activate Watchlist" })
+    .click();
+  await expect(
+    page.getByText("Today's watchlist is active — 2 symbols"),
+  ).toBeVisible();
+  await expect(
+    page.getByText("It will be included on the scanner's next normal cycle."),
+  ).toBeVisible();
+});
+
+test("Rules tab separates active FORMING rules from non-filtering proposals", async ({
+  page,
+}) => {
+  await page.route("**/api/internal/strategy-lab/capabilities", (route) =>
+    route.fulfill({ json: { asset_types: { FUTURE: { supported: false } } } }),
+  );
+  await page.route("**/api/internal/strategy-lab/rules", (route) =>
+    route.fulfill({
+      json: {
+        strategy: "experimental-forming-v1/b067b3150de3",
+        strategy_name: "Experimental Forming Setup V1",
+        strategy_maturity: "EXPERIMENTAL",
+        lifecycle_definitions: {
+          ACTIVE:
+            "Currently participates in FORMING_LONG / FORMING_SHORT decisions.",
+          EXPERIMENTAL:
+            "Machine-defined and being evaluated; not necessarily a production filter.",
+          PROPOSED:
+            "Research hypothesis only; it does not affect scanner decisions.",
+        },
+        active_rules: [
+          {
+            name: "Fast EMA direction",
+            timeframe: "10m",
+            status: "ACTIVE",
+            check: "BULLISH: EMA 5 > EMA 12; BEARISH: EMA 5 < EMA 12.",
+            affects: "BOTH",
+            why_can_fail: "Equality satisfies neither direction.",
+          },
+        ],
+        proposed_rules: [
+          {
+            name: "VIX Regime",
+            timeframe: "Market context",
+            status: "PROPOSED",
+            filtering: "OFF",
+            hypothesis: "VIX > 17 may change treatment of long setups.",
+            machine_definition: "TBD",
+          },
+          {
+            name: "MTF Daily 20/21 Cloud",
+            timeframe: "Daily",
+            status: "PROPOSED",
+            filtering: "OFF",
+            hypothesis: "Research cloud context and magnet behavior.",
+            parameters: { emas: [20, 21], source: "hl2" },
+          },
+          {
+            name: "EMA 5/12 Curl",
+            timeframe: "TBD",
+            status: "PROPOSED",
+            filtering: "OFF",
+            hypothesis: "Research a machine-defined curl concept.",
+            machine_definition: "TBD",
+          },
+        ],
+      },
+    }),
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: "Rules" }).click();
+  await expect(
+    page.getByText("experimental-forming-v1/b067b3150de3"),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Active Rules" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Fast EMA direction" }),
+  ).toBeVisible();
+  await expect(page.locator(".rule-status.active")).toHaveText("ACTIVE");
+  await expect(
+    page.getByRole("heading", { name: "Research / Proposed Rules" }),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "VIX Regime" })).toBeVisible();
+  await expect(page.getByText("Filtering", { exact: true })).toHaveCount(3);
+  await expect(page.getByText("OFF", { exact: true })).toHaveCount(3);
+  await expect(
+    page.getByText("PROPOSED", { exact: true }).first(),
+  ).toBeVisible();
+});
+
 test("calendar, historical groups, keyboard search, and session defaults", async ({
   page,
 }) => {

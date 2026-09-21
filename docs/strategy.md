@@ -50,9 +50,9 @@ context classification or define strategy rules.
 The current strategy identifier is `experimental-forming-v1/<configuration hash>`.
 The suffix derives from the four configured V1 thresholds; historical
 observations retain the identifier that produced them. A future algorithm change
-must use a new base version. The unmounted internal rules API reads implemented
-checks and experimental thresholds from backend configuration. Proposed rules
-remain internal research hypotheses and never alter this detector.
+must use a new base version. The private internal rules API and Strategy Lab Rules
+tab read implemented checks and experimental thresholds from backend configuration.
+Proposed rules remain internal research hypotheses and never alter this detector.
 
 This is an **EXPERIMENTAL scanner heuristic**, not an official Ripster A+, A,
 or A- rule. The 10-minute classifier supplies directional context only. The

@@ -24,7 +24,7 @@ class ImportService:
     def __init__(self, store):
         self.store = store
 
-    def import_image(self, path, filename):
+    def import_image(self, path, filename, *, activate=True):
         with self.store.claim_lock('upload') as acquired:
             if not acquired:
                 raise BusyError('Another watchlist import is already running. Try again when it finishes.')
@@ -38,14 +38,16 @@ class ImportService:
                 imported = validate_candidates(tokens, directory)
                 self.store.update_import(snapshot_id, imported)
                 rejected = [asdict(item) for item in imported.rejected]
-                report = {'status': 'queued', 'candidate_count': len(imported.candidates),
+                report = {'status': 'queued' if activate else 'ready_for_review',
+                          'candidate_count': len(imported.candidates),
                           'validated_count': len(imported.validated), 'validated_symbols': list(imported.validated),
                           'rejected': [item['candidate'] for item in rejected], 'rejection_details': rejected,
                           'processed_at': iso(now()), 'scan_started': False, 'scan_completed': False,
                           'snapshot_id': snapshot_id}
                 if not imported.validated:
                     raise ImportFailed('No validated ticker symbols. Previous watchlist retained.', report)
-                self.store.activate(snapshot_id)
+                if activate:
+                    self.store.activate(snapshot_id)
                 return report
             except Exception as exc:
                 message = (str(exc) if isinstance(exc, ImportFailed) else

@@ -120,7 +120,7 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(active[0].provider, 'Alpaca Screener')
 
     def test_universe_scanned_once_and_sector_snapshot_is_objective(self):
-        snapshot = self.store.snapshot(('AMD', 'MSFT'))
+        snapshot = self.store.snapshot(('AMD', 'MSFT'), source='image')
         self.store.activate(snapshot)
         worker = ScannerWorker(self.store, discovery_provider=self.provider,
                                discovery_settings=DiscoverySettings(True, 300, 10))
@@ -140,7 +140,10 @@ class DiscoveryTests(unittest.TestCase):
                  'AMD': 'Technology', 'MSFT': 'Technology'}):
             self.assertEqual(worker.run_once(), 'scanned')
         self.assertEqual(len(scan.call_args_list), 4)
-        self.assertEqual(len({call.args[0].symbols[0] for call in scan.call_args_list}), 4)
+        scanned_symbols = [call.args[0].symbols[0] for call in scan.call_args_list]
+        self.assertEqual(set(scanned_symbols), {'AMD', 'MSFT', 'NVDA', 'TSLA'})
+        self.assertEqual(scanned_symbols.count('AMD'), 1)  # Upload + Alpaca overlap.
+        self.assertIn('MSFT', scanned_symbols)  # Upload-only symbol remains eligible.
         internal = self.store.read()
         self.assertEqual(len(internal['universe']), 4)
         self.assertEqual(len(internal['watchlist']), 2)

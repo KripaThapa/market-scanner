@@ -104,6 +104,14 @@ class Store:
             return upload.id
 
     @staticmethod
+    def today_date():
+        return now().date().isoformat()
+
+    def current_snapshot_for_activation(self, snapshot_id):
+        with self.session() as session:
+            return self.snapshot_dict(session, session.get(WatchlistUpload, snapshot_id))
+
+    @staticmethod
     def _symbols(session, upload_id, symbols, rejected, timestamp):
         session.execute(delete(WatchlistSymbol).where(WatchlistSymbol.watchlist_upload_id == upload_id))
         for symbol in symbols:
@@ -121,6 +129,7 @@ class Store:
             upload.candidate_count = len(imported.candidates)
             upload.validated_count = len(imported.validated)
             upload.processed_at = now()
+            upload.processing_status = 'ready_for_review'
             self._symbols(session, snapshot_id, imported.validated,
                           [asdict(item) for item in imported.rejected], now())
 
@@ -173,6 +182,13 @@ class Store:
             state = session.get(AppState, 1)
             return self.snapshot_dict(session, session.get(WatchlistUpload, state.active_watchlist_id)
                                       if state.active_watchlist_id else None)
+
+    def today_active_uploaded_snapshot(self):
+        """Return today's active image upload without exposing it through public reads."""
+        active = self.active_snapshot()
+        if active and active['source'] == 'image' and active['date'] == now().date().isoformat():
+            return active
+        return None
 
     def latest_upload(self):
         with self.session() as session:

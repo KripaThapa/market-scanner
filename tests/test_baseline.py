@@ -172,7 +172,8 @@ class BaselineTests(unittest.TestCase):
         private = TestClient(create_internal_app(store=self.store,
             replay_provider=MemoryProvider()), base_url='http://localhost')
         response = private.post('/api/internal/strategy-lab/baseline/fixed-universe', json={
-            'symbols': ['nvda', 'NVDA'], 'last_trading_days': 1})
+            'symbols': ['nvda', 'NVDA'],
+            'start_date': self.day.isoformat(), 'end_date': self.day.isoformat()})
         self.assertEqual(response.status_code, 202)
         result = response.json()
         self.assertEqual(result['run_type'], 'FIXED_RESEARCH_UNIVERSE')
@@ -302,7 +303,10 @@ class BaselineTests(unittest.TestCase):
                 last_seen_at=at, active=True, metrics={}))
         baseline = self.baseline()
         fixed = baseline.execute_fixed(['NVDA'], [self.day])
-        live = baseline.catch_up(1)
+        # Keep the scheduler test on the known fixture session rather than
+        # whichever XNYS session happens to be current when the suite runs.
+        with patch.object(baseline.calendar, 'latest_completed', return_value=self.day):
+            live = baseline.catch_up(1)
         self.assertEqual(fixed['run_type'], 'FIXED_RESEARCH_UNIVERSE')
         self.assertEqual(live['run_type'], 'LIVE_RECORDED_UNIVERSE')
         self.assertEqual(live['coverage']['symbols_evaluated'], 2)

@@ -85,6 +85,112 @@ main {
 .fixed-research-notice {
   border-color: #527b9b;
 }
+.daily-watchlist,
+.daily-watchlist-active,
+.daily-watchlist-review,
+.daily-watchlist-upload {
+  background: #111821;
+  border: 1px solid #253344;
+  border-radius: 12px;
+  margin: 15px 0;
+  padding: 18px;
+}
+.daily-watchlist-upload {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+}
+.daily-watchlist-upload label {
+  display: grid;
+  gap: 8px;
+}
+.daily-watchlist-active {
+  border-color: #1a7f67;
+}
+.daily-watchlist-error {
+  color: #ffd8ad;
+  background: #302315;
+  border: 1px solid #9a672f;
+  border-radius: 8px;
+  padding: 12px;
+}
+.rules-header,
+.rules-lifecycle,
+.rule-card {
+  background: #111821;
+  border: 1px solid #253344;
+  border-radius: 12px;
+  margin: 15px 0;
+  padding: 18px;
+}
+.rules-header h2,
+.rules-view > section > h2 {
+  margin-top: 0;
+}
+.rules-lifecycle {
+  border-color: #465567;
+}
+.rules-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+  gap: 12px;
+}
+.rule-card {
+  margin: 0;
+}
+.rule-card.active {
+  border-left: 4px solid #1a7f67;
+}
+.rule-card.proposed {
+  border-left: 4px solid #9a672f;
+}
+.rule-card-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.rule-card-heading h3 {
+  margin: 0 0 14px;
+}
+.rule-status {
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 5px 9px;
+}
+.rule-status.active {
+  background: #144b3f;
+  color: #a9f0d9;
+}
+.rule-status.proposed {
+  background: #563b1d;
+  color: #ffdda8;
+}
+.rule-card dl {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+}
+.rule-card dl > div {
+  display: grid;
+  gap: 3px;
+}
+.rule-card dt {
+  color: #a6b3c2;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.rule-card dd {
+  line-height: 1.45;
+  margin: 0;
+}
+.rule-limitation,
+.rules-error {
+  color: #ffd8ad;
+}
 .baseline-coverage-warning h2 {
   margin: 0 0 8px;
   color: #ffd28c;

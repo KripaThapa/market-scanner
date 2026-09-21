@@ -10,6 +10,7 @@ from pathlib import Path
 import os
 
 from backend.store import Store
+from backend.rules_catalog import strategy_lab_rules_catalog
 from research.config import load_settings
 from research.repository import ResearchRepository
 from backend.service import BusyError, ImportFailed, ImportService
@@ -54,6 +55,10 @@ class FixedBaselineInput(BaseModel):
     last_trading_days: int | None = Field(default=20, ge=1, le=250)
     start_date: str | None = Field(default=None, pattern=r'^\d{4}-\d{2}-\d{2}$')
     end_date: str | None = Field(default=None, pattern=r'^\d{4}-\d{2}-\d{2}$')
+
+
+class WatchlistActivationInput(BaseModel):
+    snapshot_id: int = Field(ge=1)
 
 
 def create_internal_app(*, store=None, data_dir=None, replay_provider=None):
@@ -114,6 +119,10 @@ def create_internal_app(*, store=None, data_dir=None, replay_provider=None):
     @app.get('/api/internal/strategy-lab/capabilities')
     def replay_capabilities():
         return replay_call(lambda: lab().capabilities())
+
+    @app.get('/api/internal/strategy-lab/rules')
+    def strategy_lab_rules():
+        return strategy_lab_rules_catalog(research.rules())
 
     @app.get('/api/internal/strategy-lab/calendar')
     def replay_calendar(year: int = Query(ge=1990, le=2100),
@@ -219,10 +228,13 @@ def create_internal_app(*, store=None, data_dir=None, replay_provider=None):
 
     @app.post('/internal/watchlist/upload', status_code=202)
     def upload(file: UploadFile):
+        return process_upload(file, activate=True)
+
+    def process_upload(file, *, activate):
         path = None
         try:
             path, filename = save_image(file, upload_dir)
-            return import_service.import_image(path, filename)
+            return import_service.import_image(path, filename, activate=activate)
         except BusyError:
             if path:
                 path.unlink(missing_ok=True)
@@ -233,6 +245,30 @@ def create_internal_app(*, store=None, data_dir=None, replay_provider=None):
                                 {'message': 'Watchlist import failed', 'report': report}) from None
         finally:
             file.file.close()
+
+    @app.get('/api/internal/strategy-lab/watchlist/today')
+    def today_watchlist():
+        return {'date': store.today_date(),
+                'active': store.today_active_uploaded_snapshot()}
+
+    @app.post('/api/internal/strategy-lab/watchlist/upload', status_code=202)
+    def stage_watchlist(file: UploadFile):
+        return process_upload(file, activate=False)
+
+    @app.post('/api/internal/strategy-lab/watchlist/activate')
+    def activate_watchlist(body: WatchlistActivationInput):
+        snapshot_id = body.snapshot_id
+        snapshot = store.current_snapshot_for_activation(snapshot_id)
+        if snapshot is None:
+            raise HTTPException(404, 'Watchlist upload not found')
+        if snapshot['source'] != 'image' or snapshot['date'] != store.today_date():
+            raise HTTPException(409, "Only today's uploaded watchlist can be activated")
+        if snapshot['status'] != 'ready_for_review' or not snapshot['symbols']:
+            raise HTTPException(409, 'Watchlist is not ready for activation')
+        if not store.activate(snapshot_id):
+            raise HTTPException(409, 'Watchlist could not be activated')
+        return {'active': store.today_active_uploaded_snapshot(),
+                'message': "Today's watchlist is active and will be included on the scanner's next normal cycle."}
 
     @app.get('/internal/rules')
     def rules():

@@ -4,6 +4,8 @@ import Chart from "./Chart";
 import CalendarPicker from "./CalendarPicker";
 import StockSelector from "./StockSelector";
 import BaselineReport from "./BaselineReport";
+import DailyWatchlist from "./DailyWatchlist";
+import Rules from "./Rules";
 
 const localTime = (value, zone) =>
   value
@@ -167,8 +169,22 @@ export default function App() {
         >
           Historical baseline
         </button>
+        <button
+          className={view === "WATCHLIST" ? "selected" : ""}
+          onClick={() => setView("WATCHLIST")}
+        >
+          Daily Watchlist
+        </button>
+        <button
+          className={view === "RULES" ? "selected" : ""}
+          onClick={() => setView("RULES")}
+        >
+          Rules
+        </button>
       </nav>
       {view === "BASELINE" && <BaselineReport />}
+      {view === "WATCHLIST" && <DailyWatchlist />}
+      {view === "RULES" && <Rules />}
       {view === "REPLAY" && (
         <>
           {!replay && (

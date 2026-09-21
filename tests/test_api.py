@@ -88,6 +88,26 @@ class APITests(unittest.TestCase):
 
     def test_rules_api_uses_config_and_proposals_never_edit_live_rules(self):
         self.assertEqual(self.client.get('/api/rules').status_code, 404)
+        self.assertEqual(self.client.get('/api/internal/strategy-lab/rules').status_code, 404)
+        catalog = self.internal_client.get('/api/internal/strategy-lab/rules').json()
+        self.assertEqual(catalog['strategy'], 'experimental-forming-v1/b067b3150de3')
+        self.assertEqual({rule['status'] for rule in catalog['active_rules']}, {'ACTIVE'})
+        self.assertEqual({rule['name'] for rule in catalog['active_rules']}, {
+            'Fast EMA direction', 'Slow EMA direction', 'Price versus clouds and VWAP',
+            'Directional context', 'Prior move lookback', 'Minimum retrace',
+            'Fast cloud proximity', 'Slow cloud structure'})
+        proposed = {rule['name']: rule for rule in catalog['proposed_rules']}
+        self.assertEqual(set(proposed), {
+            'VIX Regime', 'MTF Daily 20/21 Cloud', 'MTF Daily 50/55 Cloud',
+            'EMA 5/12 Curl', 'EMA 34/50 Curl', 'First Pullback', 'Watchlist Levels'})
+        self.assertEqual({rule['filtering'] for rule in proposed.values()}, {'OFF'})
+        self.assertEqual(proposed['VIX Regime']['machine_definition'], 'TBD')
+        self.assertEqual(proposed['MTF Daily 20/21 Cloud']['parameters'],
+                         {'emas': [20, 21], 'source': 'hl2'})
+        self.assertEqual(proposed['MTF Daily 50/55 Cloud']['parameters'],
+                         {'emas': [50, 55], 'source': 'hl2'})
+        self.assertIn('not currently used by FORMING',
+                      proposed['Watchlist Levels']['limitation'])
         before = self.internal_client.get('/internal/rules').json()
         self.assertEqual(before['research_window'], {'start': '08:00', 'end': '10:00',
                                                       'timezone': 'America/Chicago'})
@@ -262,6 +282,49 @@ class APITests(unittest.TestCase):
         with self.store.session() as session:
             self.assertEqual(session.scalar(select(func.count()).select_from(WatchlistSymbol)), 2)
             self.assertEqual(session.scalar(select(func.count()).select_from(ScanResultModel)), 0)
+
+    def test_strategy_lab_watchlist_review_then_activation_preserves_each_upload(self):
+        mocks = self.mock_import(tokens=[OCRToken('NVDA', 99), OCRToken('AMD', 98)])
+        mocks['fetch_active_symbols'].return_value = {'NVDA', 'AMD'}
+        staged = self.internal_client.post('/api/internal/strategy-lab/watchlist/upload', files={
+            'file': ('daily.png', image_bytes(), 'image/png')})
+        self.assertEqual(staged.status_code, 202, staged.text)
+        report = staged.json()
+        self.assertEqual(report['status'], 'ready_for_review')
+        self.assertEqual(report['validated_symbols'], ['NVDA', 'AMD'])
+        self.assertIsNone(self.store.today_active_uploaded_snapshot())
+
+        activated = self.internal_client.post('/api/internal/strategy-lab/watchlist/activate',
+            json={'snapshot_id': report['snapshot_id']})
+        self.assertEqual(activated.status_code, 200, activated.text)
+        self.assertEqual(activated.json()['active']['symbols'], ['NVDA', 'AMD'])
+        self.assertIn('next normal cycle', activated.json()['message'])
+        first_upload_id = report['snapshot_id']
+
+        replacement = self.internal_client.post('/api/internal/strategy-lab/watchlist/upload', files={
+            'file': ('later.png', image_bytes(), 'image/png')})
+        self.assertEqual(replacement.status_code, 202)
+        second = replacement.json()
+        self.assertEqual(self.store.today_active_uploaded_snapshot()['id'], first_upload_id)
+        self.assertEqual(self.internal_client.post('/api/internal/strategy-lab/watchlist/activate',
+            json={'snapshot_id': second['snapshot_id']}).status_code, 200)
+        with self.store.session() as session:
+            first = session.get(WatchlistSymbol, 1)
+            self.assertEqual(first.watchlist_upload_id, first_upload_id)
+            self.assertEqual(first.symbol, 'NVDA')
+            self.assertEqual(session.scalar(select(func.count()).select_from(WatchlistSymbol)), 4)
+
+        active = self.internal_client.get('/api/internal/strategy-lab/watchlist/today').json()['active']
+        self.assertEqual(active['symbols'], ['NVDA', 'AMD'])
+        # Current OCR/import response exposes validated symbols, not note associations.
+        self.assertEqual(report['validated_symbols'], ['NVDA', 'AMD'])
+
+    def test_daily_watchlist_remains_private(self):
+        self.assertEqual(self.client.get('/api/internal/strategy-lab/watchlist/today').status_code, 404)
+        self.assertEqual(self.client.post('/api/internal/strategy-lab/watchlist/upload').status_code, 404)
+        self.assertEqual(self.client.post('/api/internal/strategy-lab/watchlist/activate',
+            json={'snapshot_id': 1}).status_code, 404)
+        self.assertEqual(self.client.get('/api/watchlist').status_code, 404)
 
     @unittest.skipUnless(shutil.which('tesseract'), 'Tesseract integration runs in the Docker image')
     def test_real_ocr_upload_then_worker_scan(self):
