@@ -304,11 +304,16 @@ class APITests(unittest.TestCase):
         self.assertEqual(report['validated_symbols'], ['NVDA', 'AMD'])
         self.assertIsNone(self.store.today_active_uploaded_snapshot())
 
-        activated = self.internal_client.post('/api/internal/strategy-lab/watchlist/activate',
-            json={'snapshot_id': report['snapshot_id']})
+        with self.assertLogs('backend.internal_api', level='INFO') as activation_logs:
+            activated = self.internal_client.post('/api/internal/strategy-lab/watchlist/activate',
+                json={'snapshot_id': report['snapshot_id']})
         self.assertEqual(activated.status_code, 200, activated.text)
         self.assertEqual(activated.json()['active']['symbols'], ['NVDA', 'AMD'])
         self.assertIn('next normal cycle', activated.json()['message'])
+        activation_output = '\n'.join(activation_logs.output)
+        self.assertIn('stage=transaction_started', activation_output)
+        self.assertIn('stage=transaction_committed', activation_output)
+        self.assertIn('stage=completed', activation_output)
         first_upload_id = report['snapshot_id']
 
         replacement = self.internal_client.post('/api/internal/strategy-lab/watchlist/upload', files={

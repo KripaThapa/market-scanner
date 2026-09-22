@@ -175,10 +175,13 @@ export default function DailyWatchlist() {
                   </tr>
                 </thead>
                 <tbody>
-                  {pending.validated_symbols.map((symbol) => (
-                    <tr key={symbol}>
-                      <td>{symbol}</td>
-                      <td>Not captured by the current screenshot extractor</td>
+                  {(pending.validated_rows?.length
+                    ? pending.validated_rows
+                    : pending.validated_symbols.map((symbol) => ({ symbol })))
+                    .map((row) => (
+                    <tr key={row.symbol}>
+                      <td>{row.symbol}</td>
+                      <td>{row.original_note || "Not captured by the current screenshot extractor"}</td>
                     </tr>
                   ))}
                 </tbody>

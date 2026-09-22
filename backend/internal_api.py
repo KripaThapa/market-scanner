@@ -304,6 +304,7 @@ def create_internal_app(*, store=None, data_dir=None, replay_provider=None,
         payload = {'snapshot_id': upload['id'], 'status': upload['status']}
         if upload['status'] == 'ready_for_review':
             payload.update({'validated_symbols': upload['symbols'],
+                            'validated_rows': upload.get('symbol_rows', []),
                             'candidates': upload['candidates'],
                             'rejected': [item['candidate'] for item in upload['rejected']],
                             'rejection_details': upload['rejected']})
@@ -337,17 +338,40 @@ def create_internal_app(*, store=None, data_dir=None, replay_provider=None,
     @app.post('/api/internal/strategy-lab/watchlist/activate')
     def activate_watchlist(body: WatchlistActivationInput):
         snapshot_id = body.snapshot_id
-        snapshot = store.current_snapshot_for_activation(snapshot_id)
-        if snapshot is None:
-            raise HTTPException(404, 'Watchlist upload not found')
-        if snapshot['source'] != 'image' or snapshot['date'] != store.today_date():
-            raise HTTPException(409, "Only today's uploaded watchlist can be activated")
-        if snapshot['status'] != 'ready_for_review' or not snapshot['symbols']:
-            raise HTTPException(409, 'Watchlist is not ready for activation')
-        if not store.activate(snapshot_id):
-            raise HTTPException(409, 'Watchlist could not be activated')
-        return {'active': store.today_active_uploaded_snapshot(),
-                'message': "Today's watchlist is active and will be included on the scanner's next normal cycle."}
+        started = time.perf_counter()
+        stage = 'snapshot_lookup'
+        log.info('watchlist_activation stage=started snapshot_id=%s', snapshot_id)
+        try:
+            snapshot = store.current_snapshot_for_activation(snapshot_id)
+            log.info('watchlist_activation stage=snapshot_loaded snapshot_id=%s elapsed_ms=%.1f',
+                     snapshot_id, (time.perf_counter() - started) * 1000)
+            if snapshot is None:
+                raise HTTPException(404, 'Watchlist upload not found')
+            if snapshot['source'] != 'image' or snapshot['date'] != store.today_date():
+                raise HTTPException(409, "Only today's uploaded watchlist can be activated")
+            if snapshot['status'] != 'ready_for_review' or not snapshot['symbols']:
+                raise HTTPException(409, 'Watchlist is not ready for activation')
+            stage = 'activation_transaction'
+            activation_started = time.perf_counter()
+            log.info('watchlist_activation stage=transaction_started snapshot_id=%s', snapshot_id)
+            if not store.activate(snapshot_id):
+                raise HTTPException(409, 'Watchlist could not be activated')
+            log.info('watchlist_activation stage=transaction_committed snapshot_id=%s elapsed_ms=%.1f',
+                     snapshot_id, (time.perf_counter() - activation_started) * 1000)
+            stage = 'active_snapshot_read'
+            active = store.today_active_uploaded_snapshot()
+            log.info('watchlist_activation stage=completed snapshot_id=%s total_elapsed_ms=%.1f',
+                     snapshot_id, (time.perf_counter() - started) * 1000)
+            return {'active': active,
+                    'message': "Today's watchlist is active and will be included on the scanner's next normal cycle."}
+        except HTTPException:
+            log.info('watchlist_activation stage=failed snapshot_id=%s failed_stage=%s elapsed_ms=%.1f',
+                     snapshot_id, stage, (time.perf_counter() - started) * 1000)
+            raise
+        except Exception:
+            log.warning('watchlist_activation stage=failed snapshot_id=%s failed_stage=%s elapsed_ms=%.1f',
+                        snapshot_id, stage, (time.perf_counter() - started) * 1000)
+            raise
 
     @app.get('/internal/rules')
     def rules():

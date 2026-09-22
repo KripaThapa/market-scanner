@@ -35,6 +35,7 @@ class WatchlistSymbol(Base):
     symbol: Mapped[str] = mapped_column(Text)
     validation_status: Mapped[str] = mapped_column(String(20))
     rejection_reason: Mapped[str | None] = mapped_column(Text)
+    original_note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 

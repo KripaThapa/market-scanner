@@ -15,6 +15,30 @@ class WatchlistImageError(ValueError):
 class OCRToken:
     text: str
     confidence: float
+    left: int = 0
+    top: int = 0
+    width: int = 0
+    height: int = 0
+    block_num: int = 0
+    par_num: int = 0
+    line_num: int = 0
+    word_num: int = 0
+
+    @property
+    def right(self):
+        return self.left + self.width
+
+    @property
+    def bottom(self):
+        return self.top + self.height
+
+    @property
+    def center_x(self):
+        return self.left + self.width / 2
+
+    @property
+    def center_y(self):
+        return self.top + self.height / 2
 
 
 def extract_image_tokens(image_path: str | Path) -> list[OCRToken]:
@@ -45,7 +69,13 @@ def extract_image_tokens(image_path: str | Path) -> list[OCRToken]:
     try:
         for row in reader:
             if row["level"] == "5" and row["text"] and row["text"].strip():
-                tokens.append(OCRToken(row["text"].strip(), float(row["conf"])))
+                def integer(name):
+                    return int(row.get(name) or 0)
+                tokens.append(OCRToken(
+                    row["text"].strip(), float(row["conf"]),
+                    integer("left"), integer("top"), integer("width"), integer("height"),
+                    integer("block_num"), integer("par_num"), integer("line_num"), integer("word_num"),
+                ))
     except (TypeError, ValueError, KeyError) as exc:
         raise WatchlistImageError("Tesseract returned invalid word data") from exc
     return tokens

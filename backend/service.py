@@ -6,7 +6,7 @@ import time
 
 from ripster_scanner.config import load_config, asset_directory_uses_paper
 from ripster_scanner.market_data import fetch_active_symbols
-from ripster_scanner.watchlist import validate_candidates
+from ripster_scanner.watchlist import extract_watchlist_rows, validate_candidates, validate_watchlist_rows
 from ripster_scanner.watchlist_image import extract_image_tokens
 
 from .store import now, iso
@@ -50,8 +50,9 @@ class ImportService:
             ocr_started = time.perf_counter()
             log.info('watchlist_import stage=ocr_started snapshot_id=%s', snapshot_id)
             tokens = extract_image_tokens(path)
-            log.info('watchlist_import stage=ocr_completed snapshot_id=%s elapsed_ms=%.1f token_count=%s',
-                     snapshot_id, (time.perf_counter() - ocr_started) * 1000, len(tokens))
+            rows = extract_watchlist_rows(tokens)
+            log.info('watchlist_import stage=ocr_completed snapshot_id=%s elapsed_ms=%.1f token_count=%s row_count=%s',
+                     snapshot_id, (time.perf_counter() - ocr_started) * 1000, len(tokens), len(rows))
 
             config = load_config(symbols=())
             stage = 'provider_directory'
@@ -64,7 +65,10 @@ class ImportService:
 
             stage = 'candidate_validation'
             validation_started = time.perf_counter()
-            imported = validate_candidates(tokens, directory)
+            # Keep the legacy flat-token path for old/test OCR adapters which
+            # do not provide geometry. Real screenshot imports are row-aware.
+            imported = (validate_watchlist_rows(rows, directory) if rows
+                        else validate_candidates(tokens, directory))
             log.info('watchlist_import stage=candidate_validation_completed snapshot_id=%s elapsed_ms=%.1f candidate_count=%s validated_count=%s rejected_count=%s',
                      snapshot_id, (time.perf_counter() - validation_started) * 1000,
                      len(imported.candidates), len(imported.validated), len(imported.rejected))
@@ -81,6 +85,7 @@ class ImportService:
                       'rejected': [item['candidate'] for item in rejected], 'rejection_details': rejected,
                       'processed_at': iso(now()), 'scan_started': False, 'scan_completed': False,
                       'snapshot_id': snapshot_id}
+            report['validated_rows'] = [row.as_dict() for row in imported.rows]
             if not imported.validated:
                 raise ImportFailed('No validated ticker symbols. Previous watchlist retained.', report)
             if activate:

@@ -143,11 +143,13 @@ class Store:
             return self.snapshot_dict(session, session.get(WatchlistUpload, snapshot_id))
 
     @staticmethod
-    def _symbols(session, upload_id, symbols, rejected, timestamp):
+    def _symbols(session, upload_id, symbols, rejected, timestamp, rows=()):
         session.execute(delete(WatchlistSymbol).where(WatchlistSymbol.watchlist_upload_id == upload_id))
+        notes = {row.symbol: row.original_note for row in rows}
         for symbol in symbols:
             session.add(WatchlistSymbol(watchlist_upload_id=upload_id, symbol=symbol,
-                                       validation_status='validated', created_at=timestamp))
+                                       validation_status='validated', original_note=notes.get(symbol),
+                                       created_at=timestamp))
         for item in rejected:
             session.add(WatchlistSymbol(watchlist_upload_id=upload_id, symbol=item['candidate'],
                 validation_status='rejected', rejection_reason=item['reason'], created_at=timestamp))
@@ -163,7 +165,7 @@ class Store:
             upload.processing_claimed_at = None
             upload.processing_status = 'ready_for_review'
             self._symbols(session, snapshot_id, imported.validated,
-                          [asdict(item) for item in imported.rejected], now())
+                          [asdict(item) for item in imported.rejected], now(), imported.rows)
 
     def activate(self, snapshot_id, *, expected_active=None):
         """Compare-and-set protects fallback/day rollover from racing a new upload."""
@@ -201,6 +203,8 @@ class Store:
                 'candidate_count': upload.candidate_count, 'validated_count': upload.validated_count,
                 'candidates': upload.candidates,
                 'symbols': [s.symbol for s in symbols if s.validation_status == 'validated'],
+                'symbol_rows': [{'symbol': s.symbol, 'original_note': s.original_note}
+                                for s in symbols if s.validation_status == 'validated'],
                 'rejected': [{'candidate': s.symbol, 'reason': s.rejection_reason}
                              for s in symbols if s.validation_status == 'rejected'], 'error': upload.error}
 
