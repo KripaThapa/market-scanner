@@ -11,6 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .store import Store
+from .alerts import public_alert, public_marker
 from .security import PublicSecurityMiddleware
 
 
@@ -41,6 +42,7 @@ def _public_detail(detail):
     result = {key: detail.get(key) for key in
               ('symbol', 'scanned_at', 'context_10m', 'context_3m', 'latest_price',
                'setup_state', 'first_detected_at', 'last_seen_at', 'candle_state')}
+    result['alerts'] = [public_marker(row) for row in detail['alerts']]
     result['candles_3m'] = _public_candles(detail['candles_3m'])
     result['candles_10m'] = _public_candles(detail['candles_10m'])
     return result
@@ -89,8 +91,7 @@ def create_app(data_dir=None, *, store=None):
         return {'state': state,
                 'universe': [_public_universe(row) for row in data['universe']],
                 'setups': [_public_setup(row) for row in data['setups']],
-                'alerts': [{key: row.get(key) for key in ('symbol', 'timestamp', 'alert_type')}
-                           for row in data['alerts']],
+                'alerts': [public_alert(row) for row in data['alerts']],
                 'sectors': [_public_sector(row) for row in data['sectors']],
                 'counts': {
             'total': sum(r['context_10m'] != 'PENDING' for r in rows),
@@ -101,8 +102,9 @@ def create_app(data_dir=None, *, store=None):
             'developing': len(data['setups']),
             'forming_long': sum(r['setup_state'] == 'FORMING_LONG' for r in data['universe']),
             'forming_short': sum(r['setup_state'] == 'FORMING_SHORT' for r in data['universe']),
-            'sectors_represented': len(data['sectors']),
-        }, 'capabilities': {'forming_setups': True, 'alerts': False,
+            'sectors_represented': len({r['sector'] for r in rows if r['sector'] and r['sector'].strip().upper() not in {'UNKNOWN', 'UNCLASSIFIED'}}),
+            'missing_sector_data': sum(not r['sector'] or r['sector'].strip().upper() in {'UNKNOWN', 'UNCLASSIFIED'} for r in rows),
+        }, 'capabilities': {'forming_setups': True, 'alerts': True,
                              'volatility': False, 'relative_strength': False}}
 
     @app.get('/api/discovery')
@@ -118,9 +120,8 @@ def create_app(data_dir=None, *, store=None):
 
     @app.get('/api/alerts')
     def alerts():
-        return {'items': [{key: row.get(key) for key in ('symbol', 'timestamp', 'alert_type')}
-                          for row in store.read()['alerts']], 'implemented': False,
-                'message': 'Alert generation and delivery are TBD. Latest 200 stored events.'}
+        return {'items': [public_alert(row) for row in store.read()['alerts']], 'implemented': True,
+                'message': 'Latest 200 stored events. Completed-candle FORMING alerts are experimental, not trade entries.'}
 
     @app.get('/api/sectors')
     def sectors():
@@ -150,6 +151,7 @@ def create_app(data_dir=None, *, store=None):
             raise HTTPException(404, 'Symbol is not in the current scan')
         return {'symbol': detail['symbol'], 'timeframe': timeframe,
                 'scanned_at': detail['scanned_at'],
-                'candles': _public_candles(detail[f'candles_{timeframe}'])}
+                'candles': _public_candles(detail[f'candles_{timeframe}']),
+                'alerts': [public_marker(row) for row in detail['alerts']] if timeframe == '3m' else []}
 
     return app

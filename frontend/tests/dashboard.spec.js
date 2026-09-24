@@ -287,3 +287,113 @@ test("periodic refresh retains stale data on errors and later recovers", async (
   ).toBeVisible();
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
+
+test("dashboard names scanner results and does not count Unknown as a known sector", async ({
+  page,
+}) => {
+  const body = fixture();
+  body.counts.sectors_represented = 0;
+  body.counts.missing_sector_data = 2;
+  body.universe.forEach((item) => {
+    item.sector = "UNKNOWN";
+  });
+  body.sectors = [{ sector: "UNKNOWN", symbols: ["NVDA", "AMD"] }];
+  await mockAPI(page, body);
+  await page.goto("/");
+  await expect(page.getByText("Stocks scanned", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Scanner results" }),
+  ).toBeVisible();
+  await expect(page.getByText("Active universe", { exact: true })).toHaveCount(
+    0,
+  );
+  await expect(
+    page.getByText("Universe overview", { exact: true }),
+  ).toHaveCount(0);
+  const metric = page.locator(".metric").filter({ hasText: "Known sectors" });
+  await expect(metric.locator("strong")).toHaveText("0");
+  await expect(metric).toContainText("2 stocks missing sector data");
+});
+
+test("recent alerts refresh, open stock detail, and render persisted FORMING markers", async ({
+  page,
+}, testInfo) => {
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.addInitScript(() => {
+    window.renderedFormingLabels = [];
+    const original = CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fillText = function (text, ...args) {
+      if (text === "FORMING LONG" || text === "FORMING SHORT")
+        window.renderedFormingLabels.push(text);
+      return original.call(this, text, ...args);
+    };
+  });
+  await page.clock.install();
+  const body = fixture();
+  const alert = (id, alert_type, decision_candle_at) => ({
+    id,
+    symbol: "NVDA",
+    alert_type,
+    decision_candle_at,
+    timestamp: "2026-09-18T13:48:00Z",
+    price: 125.5,
+    context_10m: "BULLISH",
+    reason: "Experimental forming state detected.",
+  });
+  body.alerts = [alert(1, "FORMING_LONG", "2026-09-18T13:42:00Z")];
+  await mockAPI(page, body);
+  await page.route("**/api/symbols/NVDA", (route) =>
+    route.fulfill({
+      json: {
+        symbol: "NVDA",
+        setup_state: "NONE",
+        context_10m: "MIXED",
+        context_3m: "MIXED",
+        candles_10m: [],
+        candles_3m: [
+          "2026-09-18T09:42:00-04:00",
+          "2026-09-18T09:45:00-04:00",
+        ].map((timestamp) => ({
+          timestamp,
+          open: 125,
+          close: 125.5,
+          high: 126,
+          low: 124,
+          volume: 1000,
+        })),
+        alerts: body.alerts,
+      },
+    }),
+  );
+  await page.goto("/");
+  const recent = page
+    .locator("section")
+    .filter({ has: page.getByRole("heading", { name: "Recent Alerts" }) });
+  await expect(
+    recent.getByRole("cell", { name: "FORMING LONG", exact: true }),
+  ).toBeVisible();
+  await expect(
+    recent.getByRole("cell", { name: "125.50", exact: true }),
+  ).toBeVisible();
+  body.alerts.unshift(alert(2, "FORMING_SHORT", "2026-09-18T13:45:00Z"));
+  await page.clock.fastForward(15000);
+  await expect(
+    recent.getByRole("cell", { name: "FORMING SHORT", exact: true }),
+  ).toBeVisible();
+  await recent.getByRole("link", { name: "NVDA →" }).first().click();
+  await expect(page).toHaveURL(/\/symbols\/NVDA$/);
+  await page.clock.resume();
+  await expect
+    .poll(() =>
+      page.evaluate(() => [...new Set(window.renderedFormingLabels)].sort()),
+    )
+    .toEqual(["FORMING LONG", "FORMING SHORT"]);
+  await page
+    .locator("section")
+    .filter({
+      has: page.getByRole("heading", { name: "3-minute price", exact: true }),
+    })
+    .screenshot({ path: testInfo.outputPath("forming-markers.png") });
+  expect(errors).toEqual([]);
+});

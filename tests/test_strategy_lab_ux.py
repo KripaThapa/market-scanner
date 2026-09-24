@@ -34,6 +34,7 @@ class StrategyLabCreationUxTests(unittest.TestCase):
             session.flush()
             session.add(StrategyVersion(id='forming-v1', name='Experimental Forming Setup V1',
                 status='EXPERIMENTAL', config_snapshot={}, rules_snapshot=[], created_at=at))
+            session.flush()  # Persist the FK parent before inserting observations.
             for symbol, state in (('NVDA', 'FORMING_LONG'), ('MSFT', 'NONE'), ('AMD', 'NONE')):
                 session.add(ResearchObservation(
                     dedupe_key=f'{symbol}-2026-09-18', snapshot_id=upload.id, symbol=symbol,

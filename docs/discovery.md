@@ -13,3 +13,12 @@ Candle timestamps denote the start of a candle. For an evaluation time T, a 3m c
 The normal Discovery page is a source-agnostic universe page. It shows symbol, sector, price, context, setup, candle state, and update time, with sector filtering and symbol navigation. Source filtering belongs only in future authenticated research tooling. There is no Finviz integration or website scraping. Future objective screens can be added through the provider-neutral discovery result model.
 
 The private Strategy Lab **Daily Watchlist** workflow stages screenshot extraction for owner review, then activates the validated upload through the existing watchlist snapshot pointer. The upload is retained as a dated record. On the next normal scanner cycle, DiscoveryService unions its `UPLOADED_WATCHLIST` membership with Alpaca source memberships, deduplicates by symbol, and the existing scanner processes each union member once. No frontend scan is started. Upload and provenance endpoints remain on the private internal API; the public API does not expose them.
+
+Alert Foundation V1 sector investigation: `config/sectors.json` is not shipped
+in this checkout. The pinned Alpaca SDK's Asset, ActiveStock and Mover models
+supply no sector/industry fields, and the current adapters do not enrich them.
+Sector enrichment is therefore DEFERRED; a licensed/trusted classification
+source with symbol coverage, retrieval dates and update policy is needed.
+No classification is inferred from prices, names or discovery sources. The
+Dashboard's **Known sectors** excludes UNKNOWN/Unclassified, and separately
+counts stocks missing sector data. Existing configured mappings still work.

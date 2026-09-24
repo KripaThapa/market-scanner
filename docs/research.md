@@ -52,3 +52,24 @@ docker compose logs -f baseline
 The tools service executes `python -m research.baseline --last-trading-days 20`. A bounded smoke/backfill can instead use `docker compose --profile tools run --rm baseline python -m research.baseline --start YYYY-MM-DD --end YYYY-MM-DD`. The nightly worker uses `BASELINE_MAX_CATCHUP_TRADING_DAYS` to find missing completed sessions after normal outcomes and process them in chronological order. It never starts the 20-day command automatically.
 
 **BACKLOG hypotheses:** MTF Cloud Magnet and Psychological Number Magnet are unimplemented, independently testable research ideas. They do not affect FORMING V1, baseline calculations, replay charts, or stored evidence. Structured human observation tags are also unimplemented.
+
+
+## Alert evidence for future Backtest — FOUNDATION IMPLEMENTED
+
+Migration `0013` extends the existing alerts table with immutable event-time
+snapshots and introduces durable completed-observation alert state. This is
+separate from mutable live setup rows and from historical baseline episodes.
+Partial research observations remain available but never become official alerts.
+Snapshots contain only evidence available when the live scanner evaluated the
+observation, capped at publication time. No future candles reconstruct features.
+
+Future outcome evaluation will reference the stable alert ID, begin after alert
+creation/publication (not the earlier candle-open marker timestamp), and retain
+actual MFE/MAE, attainment and time to 10/20/30/50% moves in the expected direction.
+Short directions will be mirrored. The evaluation window is still undefined.
+Tentative primary HIT means reaching +30% directionally; +50% is a larger move.
+Neither percentage is a live alert trigger. **FORMING alert != trade entry.**
+This milestone does not implement that evaluator, HIT/MISS, Backtest, or changes
+to existing research outcomes. Legacy alerts are not backfilled with invented
+snapshots; missed or partial-only live observations cannot be retrospectively
+represented as alerts.

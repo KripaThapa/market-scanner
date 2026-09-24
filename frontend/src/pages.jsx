@@ -1,18 +1,23 @@
 import React, { useState } from "react";
-import { Panel, Table, Empty, time } from "./components";
+import { Panel, Table, Empty, time, alertColumns } from "./components";
 
-export function Dashboard({ data, navigate }) {
+export function Dashboard({ data, navigate, openSymbol }) {
   const counts = data?.counts || {},
     rows = data?.universe || [],
     sectors = data?.sectors || [];
   const metrics = [
-    ["Active universe", counts.total, "Unique symbols scanned", ""],
+    ["Stocks scanned", counts.total, "Unique symbols scanned", ""],
     ["Bullish context", counts.bullish, "10-minute trend", "green"],
     ["Bearish context", counts.bearish, "10-minute trend", "red"],
     ["Mixed context", counts.mixed, "10-minute trend", "yellow"],
     ["Forming long", counts.forming_long, "Current scanner states", ""],
     ["Forming short", counts.forming_short, "Current scanner states", ""],
-    ["Sectors", counts.sectors_represented, "Represented in the universe", ""],
+    [
+      "Known sectors",
+      counts.sectors_represented,
+      `${counts.missing_sector_data ?? 0} stocks missing sector data`,
+      "",
+    ],
     ["No market data", counts.no_data, "Excluded from context counts", ""],
   ];
   return (
@@ -29,7 +34,7 @@ export function Dashboard({ data, navigate }) {
       <div className="dashboard-grid">
         <Panel
           title="Market context"
-          subtitle="10-minute context across the active universe"
+          subtitle="10-minute context across stocks scanned"
           action={<span className="small-label">CONTEXT ONLY</span>}
         >
           <div className="breadth">
@@ -79,11 +84,11 @@ export function Dashboard({ data, navigate }) {
         </Panel>
       </div>
       <Panel
-        title="Universe overview"
+        title="Scanner results"
         subtitle="Current context, not entry signals"
         action={
           <button className="text-button" onClick={() => navigate("Discovery")}>
-            View universe →
+            View stocks →
           </button>
         }
       >
@@ -101,32 +106,21 @@ export function Dashboard({ data, navigate }) {
       </Panel>
       <div className="dashboard-grid">
         <Panel
-          title="Latest alerts"
-          subtitle="Stored scanner events"
+          title="Recent Alerts"
+          subtitle="Completed-candle FORMING transitions"
           action={
             <button className="text-button" onClick={() => navigate("Alerts")}>
               View all →
             </button>
           }
         >
-          {data?.alerts.length ? (
-            <div className="activity-list">
-              {data.alerts.slice(0, 4).map((alert) => (
-                <div
-                  key={`${alert.symbol}-${alert.timestamp}-${alert.alert_type}`}
-                >
-                  <strong>
-                    {alert.symbol} · {alert.alert_type}
-                  </strong>
-                  <small>{time(alert.timestamp)}</small>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <Empty title="No alerts yet" index={3}>
-              Alert generation and delivery are TBD.
-            </Empty>
-          )}
+          <Table
+            label="recent alerts"
+            rows={(data?.alerts || []).slice(0, 5)}
+            columns={alertColumns(openSymbol)}
+            emptyTitle="No FORMING alerts yet"
+            emptyText="Experimental FORMING transitions will appear here. FORMING is not a trade entry."
+          />
         </Panel>
         <Panel
           title="Sector coverage"

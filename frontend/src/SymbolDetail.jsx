@@ -1,5 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
-import { CandlestickSeries, ColorType, createChart } from "lightweight-charts";
+import {
+  CandlestickSeries,
+  ColorType,
+  createChart,
+  createSeriesMarkers,
+} from "lightweight-charts";
+import { alertMarkers } from "./alertMarkers";
 import { request } from "./api";
 import { Badge, Panel, time } from "./components";
 
@@ -13,7 +19,8 @@ const nyTime = new Intl.DateTimeFormat("en-US", {
 });
 const formatTime = (seconds) => nyTime.format(new Date(seconds * 1000));
 const value = (number) => (number == null ? "—" : Number(number).toFixed(3));
-function CandleChart({ title, candles }) {
+const noAlerts = [];
+function CandleChart({ title, candles, alerts = noAlerts }) {
   const node = useRef(null);
   const [hover, setHover] = useState(null);
   useEffect(() => {
@@ -58,6 +65,7 @@ function CandleChart({ title, candles }) {
         close,
       })),
     );
+    createSeriesMarkers(series, alertMarkers(alerts, candles));
     chart.subscribeCrosshairMove((event) => {
       if (!event.time) return setHover(null);
       const candle = bars.find((bar) => bar.time === event.time);
@@ -72,7 +80,7 @@ function CandleChart({ title, candles }) {
       resize.disconnect();
       chart.remove();
     };
-  }, [candles]);
+  }, [candles, alerts]);
   return (
     <Panel title={title} subtitle="Scanner-persisted market candles">
       {candles.length ? (
@@ -186,7 +194,11 @@ export default function SymbolDetail({ symbol, onBack, scanUpdated }) {
             </div>
           </div>
           <CandleChart title="10-minute context" candles={detail.candles_10m} />
-          <CandleChart title="3-minute price" candles={detail.candles_3m} />
+          <CandleChart
+            title="3-minute price"
+            candles={detail.candles_3m}
+            alerts={detail.alerts || noAlerts}
+          />
         </>
       )}
     </>

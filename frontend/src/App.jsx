@@ -14,11 +14,11 @@ const pages = [
   "Settings",
 ];
 const descriptions = {
-  Dashboard: "A clear view of the active universe and market context.",
+  Dashboard: "A clear view of stocks scanned and market context.",
   Discovery: "The current scanning universe and market context.",
   "Forming Setups": "Developing states reported by the scanner.",
-  Alerts: "A record of scanner events and delivery status.",
-  Sectors: "Objective counts across the active universe.",
+  Alerts: "Experimental FORMING transition events. No trade entries.",
+  Sectors: "Objective counts across stocks scanned.",
   Settings: "A preview of future scanner configuration.",
 };
 export default function App() {
@@ -142,7 +142,11 @@ export default function App() {
             />
           )}
           {!symbol && page === "Dashboard" && (
-            <Dashboard data={data} navigate={navigate} />
+            <Dashboard
+              data={data}
+              navigate={navigate}
+              openSymbol={openSymbol}
+            />
           )}
           {!symbol && page === "Discovery" && (
             <Discovery rows={data?.universe || []} openSymbol={openSymbol} />
@@ -204,14 +208,14 @@ export default function App() {
           {!symbol && page === "Alerts" && (
             <Panel
               title="Alert history"
-              subtitle="Latest 200 stored events · generation and delivery TBD"
+              subtitle="Latest 200 stored events · web alerts"
             >
               <Table
                 label="alerts"
                 rows={data?.alerts || []}
-                columns={alertColumns}
+                columns={alertColumns(openSymbol)}
                 emptyTitle="Your alert history is empty"
-                emptyText="No alert rules or delivery integrations have been implemented."
+                emptyText="New experimental FORMING episodes will appear here."
               />
             </Panel>
           )}
@@ -231,7 +235,7 @@ export default function App() {
                 {[
                   [
                     "Alert configuration",
-                    "Alert rules and destinations remain undefined.",
+                    "Web FORMING alerts are automatic. Delivery settings are not yet available.",
                     5,
                   ],
                   [

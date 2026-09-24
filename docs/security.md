@@ -25,3 +25,14 @@ The frontend container images already serve built assets through unprivileged Ng
 ## Dependency checks
 
 Python dependencies are constrained in `pyproject.toml`; frontend dependencies use `package-lock.json`. In a controlled build environment run `python -m pip list --outdated`, `python -m pip_audit` (after installing pip-audit), and `npm audit --prefix frontend`. Review findings before updating pinned packages and rerun backend tests, frontend tests/build, and Compose smoke checks. Container images also need routine image scanning in the deployment pipeline.
+
+
+Alert Foundation V1 keeps original detector reasons, EMA/VWAP evidence, strategy
+versions, provider/feed/session metadata and transition cursors in private database
+storage. Public alert DTOs use fixed field allowlists and a generic explanation;
+chart DTOs expose only event ID/state/time and decision-candle time. No snapshot,
+threshold, discovery/upload source or diagnostic field is returned. There are no
+public alert mutation routes. Database triggers protect new events from UPDATE
+and DELETE; future delivery status belongs in separate adapter-owned records.
+Alert write errors log only normalized symbol and fixed error category, never
+exception text or payloads. This adds no Discord secrets or external calls.

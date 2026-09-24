@@ -198,8 +198,34 @@ export function Table({
     </>
   );
 }
-export const alertColumns = [
-  { key: "timestamp", label: "Timestamp", render: time },
-  { key: "symbol", label: "Symbol" },
-  { key: "alert_type", label: "Type" },
+export const alertColumns = (openSymbol) => [
+  { key: "timestamp", label: "Time", render: time },
+  {
+    key: "symbol",
+    label: "Symbol",
+    render: (symbol) => (
+      <a
+        className="symbol-link"
+        href={`/symbols/${encodeURIComponent(symbol)}`}
+        onClick={(event) => {
+          event.preventDefault();
+          openSymbol(symbol);
+        }}
+      >
+        {symbol} →
+      </a>
+    ),
+  },
+  {
+    key: "alert_type",
+    label: "State",
+    render: (state) => state?.replaceAll("_", " "),
+  },
+  {
+    key: "price",
+    label: "Price",
+    render: (price) => (price == null ? "—" : Number(price).toFixed(2)),
+  },
+  { key: "context_10m", label: "10m context" },
+  { key: "reason", label: "Reason" },
 ];

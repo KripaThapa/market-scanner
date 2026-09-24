@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from backend.api import create_app
 from backend.database.models import (BaselineDay, BaselineEpisode, BaselineEvaluation,
     ActiveUniverseMember, BaselineRun, BaselineSymbolDay, DiscoveryMembership,
-    WatchlistUpload)
+    WatchlistUpload, StrategyReplaySession)
 from backend.internal_api import create_internal_app
 from db_support import test_store
 from research.baseline import HistoricalBaseline, completed_sessions, main
@@ -28,7 +28,7 @@ UTC = timezone.utc
 
 class FakeReplay:
     def __init__(self, *, fail_symbol=None, fail_once_at=None):
-        self.next_id = 1
+        self.store = None
         self.symbols = {}
         self.moves = []
         self.fail_symbol = fail_symbol
@@ -38,8 +38,18 @@ class FakeReplay:
     def create(self, symbol, asset_type, market_date, start, end):
         if symbol == self.fail_symbol:
             raise RuntimeError('fixture provider failure')
-        replay_id = self.next_id
-        self.next_id += 1
+        # Persist the referenced parent even for a fake evaluator. PostgreSQL
+        # enforces the replay_id FK; invented integer IDs only worked in SQLite.
+        at = datetime.fromisoformat(f'{market_date}T{start}').replace(tzinfo=ZoneInfo('America/Chicago'))
+        until = datetime.fromisoformat(f'{market_date}T{end}').replace(tzinfo=ZoneInfo('America/Chicago'))
+        with self.store.session() as session:
+            replay = StrategyReplaySession(instrument=symbol, asset_type=asset_type,
+                market_date=market_date, timezone='America/Chicago', visible_start=at,
+                visible_end=until, current_replay_time=at, provider='Memory', feed='FIXTURE',
+                session_configuration={}, status='READY', created_at=at, updated_at=at)
+            session.add(replay)
+            session.flush()
+            replay_id = replay.id
         self.symbols[replay_id] = symbol
         return {'id': replay_id}
 
@@ -88,7 +98,9 @@ class BaselineTests(unittest.TestCase):
                 last_seen_at=at, active=True, metrics={}))
 
     def baseline(self, fake=None):
-        return HistoricalBaseline(self.store.engine, replay_service=fake or FakeReplay(),
+        fake = fake or FakeReplay()
+        fake.store = self.store
+        return HistoricalBaseline(self.store.engine, replay_service=fake,
             provider_retries=1, retry_delay_seconds=0, progress=lambda _: None)
 
     def test_completed_trading_days_exclude_weekends_holidays_and_future(self):

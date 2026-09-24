@@ -1,7 +1,7 @@
 """Persistent data, not additional strategy rules. Schema changes require Alembic."""
 
 from datetime import datetime
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -84,6 +84,13 @@ class FormingSetup(Base):
 
 class Alert(Base):
     __tablename__ = 'alerts'
+    __table_args__ = (UniqueConstraint('symbol', 'strategy_version', 'transition_number',
+                                       name='uq_alert_transition'),
+                      Index('ix_alert_symbol_candle', 'symbol', 'decision_candle_at'))
+    transition_number: Mapped[int | None] = mapped_column(Integer)
+    strategy_version: Mapped[str | None] = mapped_column(ForeignKey('strategy_versions.id', name='fk_alert_strategy_version'))
+    decision_candle_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     id: Mapped[int] = mapped_column(primary_key=True)
     symbol: Mapped[str] = mapped_column(String(20))
     alert_type: Mapped[str] = mapped_column(Text)
@@ -91,6 +98,17 @@ class Alert(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     destination: Mapped[str | None] = mapped_column(Text)
     delivery_status: Mapped[str | None] = mapped_column(Text)
+
+
+class AlertState(Base):
+    """Confirmed market state, independent of uploads and operational episodes."""
+    __tablename__ = 'alert_states'
+    symbol: Mapped[str] = mapped_column(String(20), primary_key=True)
+    strategy_version: Mapped[str] = mapped_column(ForeignKey('strategy_versions.id'), primary_key=True)
+    setup_state: Mapped[str] = mapped_column(String(30))
+    last_candle_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_evaluated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    transition_number: Mapped[int] = mapped_column(Integer)
 
 
 class SectorMetric(Base):

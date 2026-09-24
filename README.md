@@ -39,6 +39,16 @@ The public UI has Dashboard, Discovery, Forming Setups, Sectors, Alerts, Setting
 
 The four experimental forming thresholds and their formulas are documented in [strategy](docs/strategy.md). Optional read-only `config/sectors.json` maps symbols to sectors; missing mappings remain UNKNOWN. Alpaca's asset object does not currently supply sector/industry for this implementation. The scanner still processes UNKNOWN symbols.
 
+## Web FORMING alerts
+
+Alert Foundation V1 persists experimental FORMING transitions only from completed,
+decision-eligible 3-minute observations. Recent Alerts refreshes with the dashboard;
+stock charts mark the actual persisted decision candle. Alert state survives
+provider failures, restarts and watchlist changes. Snapshots are immutable.
+FORMING is not a trade entry. Backtest and Discord delivery are not implemented.
+See [architecture](docs/architecture.md#alert-foundation-v1--implemented) for
+transition semantics, migration `0013`, evidence fields and limitations.
+
 ## Research and operations
 
 Scanner Reliability V1 applies 5-second HTTP connect and 20-second read-inactivity

@@ -238,6 +238,7 @@ class Store:
         sector_map, errors = sector_map or {}, errors or {}
         from research.config import load_settings
         from research.collector import collect_publication
+        from .alerts import collect_alerts
         from ripster_scanner.config import forming_thresholds
         from discovery.candle_state import candle_state
         research_settings = research_settings or load_settings()
@@ -342,6 +343,7 @@ class Store:
                 session.add(SectorMetric(snapshot_id=snapshot_id, sector=sector,
                     symbols=group['symbols'], symbol_count=len(group['symbols']),
                     bullish_count=group['bullish'], bearish_count=group['bearish'], calculated_at=timestamp))
+            collect_alerts(session, results, errors, sector_map, timestamp, strategy_thresholds)
             upload.processing_status = 'scanned'
             upload.error = None
             state.current_snapshot = snapshot_id
@@ -397,10 +399,9 @@ class Store:
                        **{f'ema_{span}': getattr(r, f'ema_{span}') for span in (5, 12, 34, 50)},
                        'first_detected_at': iso(r.detected_at), 'last_seen_at': iso(r.last_seen_at)} for r in session.scalars(select(FormingSetup).where(
                            FormingSetup.snapshot_id == snapshot_id, FormingSetup.active.is_(True)).order_by(FormingSetup.detected_at.desc()))]
-            alerts = [{'id': r.id, 'symbol': r.symbol, 'timestamp': iso(r.created_at),
-                       'alert_type': r.alert_type, 'reason': r.reason, 'destination': r.destination,
-                       'delivery_status': r.delivery_status} for r in session.scalars(select(Alert).order_by(
-                           Alert.created_at.desc(), Alert.id.desc()).limit(200))]
+            from .alerts import alert_row
+            alerts = [alert_row(r) for r in session.scalars(select(Alert).order_by(
+                Alert.created_at.desc(), Alert.id.desc()).limit(200))]
             sectors = [{'sector': r.sector, 'symbols': r.symbols,
                         'symbol_count': r.symbol_count, 'bullish_count': r.bullish_count,
                         'bearish_count': r.bearish_count, 'mixed_count': r.mixed_count,
@@ -424,6 +425,7 @@ class Store:
 
     def symbol_detail(self, symbol):
         """Read metadata and both chart frames from one committed scan snapshot."""
+        from .alerts import chart_alerts
         with self.session() as session:
             state = session.scalar(select(AppState).where(AppState.id == 1).with_for_update(read=True))
             snapshot_id = state.active_watchlist_id
@@ -445,6 +447,7 @@ class Store:
                 ActiveUniverseMember.symbol == symbol))
             return {
                 'symbol': symbol, 'snapshot_id': snapshot_id,
+                'alerts': chart_alerts(session, symbol, row.candles_3m or []) if row else [],
                 'scanned_at': iso(row.scanned_at) if row else None,
                 'context_10m': row.context_10m if row else 'PENDING',
                 'context_3m': row.context_3m if row else 'PENDING',
