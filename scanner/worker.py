@@ -7,8 +7,11 @@ import os
 from pathlib import Path
 import signal
 import threading
+import time
+from uuid import uuid4
 
-from alpaca.data.historical import StockHistoricalDataClient
+from ripster_scanner.alpaca_http import StockHistoricalDataClient
+from scanner.progress import error_category
 from backend.store import Store, now
 from discovery.alpaca import AlpacaDiscoveryProvider
 from discovery.config import DiscoverySettings, load_settings as load_discovery_settings
@@ -42,19 +45,38 @@ class ScannerWorker:
         return {key.upper(): value.strip() for key, value in mapping.items()}
 
     def run_once(self):
+        cycle_id = uuid4().hex
+        started = time.perf_counter()
+        log.info('cycle=%s stage=cycle_started', cycle_id)
+        try:
+            outcome = self._run_once(cycle_id)
+        except Exception as exc:
+            log.warning('cycle=%s stage=cycle_failed duration_ms=%.1f error_type=%s',
+                        cycle_id, (time.perf_counter() - started) * 1000, error_category(exc))
+            raise
+        log.info('cycle=%s stage=cycle_completed duration_ms=%.1f outcome=%s',
+                 cycle_id, (time.perf_counter() - started) * 1000, outcome)
+        return outcome
+
+    def _run_once(self, cycle_id):
         with self.store.claim_lock('scanner') as acquired:
             if not acquired:
                 log.info('Another scanner owns the scan lock; skipping cycle')
                 return 'busy'
             status = 'idle'
+            stage = 'state_update'
             try:
                 self.store.set_state(status='scanning', last_attempt=now(), scanner_heartbeat=now())
+                stage = 'universe_load'
                 current = self.store.active_snapshot()
                 if not current and self.json_fallback:
                     snapshot_id = self.store.snapshot(load_watchlist())
                     if not self.store.activate(snapshot_id, expected_active=0):
                         self.store.fail(snapshot_id, 'Superseded by a validated upload')
                     current = self.store.active_snapshot()
+                log.info('cycle=%s stage=universe_loaded uploaded_symbols=%s', cycle_id,
+                         len(current['symbols']) if current and current['source'] != 'discovery' else 0)
+                stage = 'configuration'
                 settings = self.discovery_settings or load_discovery_settings()
                 # Existing SQLite-backed tests and the standalone CLI keep their
                 # existing watchlist-only path unless a fake source is injected.
@@ -94,12 +116,14 @@ class ScannerWorker:
                         log.info('Discovery-sourced active universe is not scanned outside XNYS sessions')
                         return 'empty'
                 if current and current['date'] != now().date().isoformat() and current['source'] != 'discovery':
+                    stage = 'rollover'
                     snapshot_id = self.store.snapshot(current['symbols'], source='rollover')
                     if not self.store.activate(snapshot_id, expected_active=current['id']):
                         self.store.fail(snapshot_id, 'Superseded by a newer watchlist')
                         return 'superseded'
                     current = self.store.active_snapshot()
                 uploaded = tuple(current['symbols']) if current and current['source'] != 'discovery' else ()
+                stage = 'configuration'
                 config = load_config(symbols=uploaded)
                 provider = build_provider(config, client=StockHistoricalDataClient(
                     config.api_key, config.secret_key))
@@ -108,40 +132,70 @@ class ScannerWorker:
                     if settings.enabled else self.discovery_provider)
                 cycle_settings = (settings if is_session else DiscoverySettings(
                     False, settings.interval_seconds, settings.top))
+                stage = 'discovery'
+                stage_started = time.perf_counter()
+                log.info('cycle=%s stage=discovery_started', cycle_id)
                 universe = DiscoveryService(self.store.engine, discovery_provider, cycle_settings,
-                    research_settings).build_universe(uploaded, self.sector_map(), at=current_time)
+                    research_settings).build_universe(uploaded, self.sector_map(), at=current_time,
+                                                     cycle_id=cycle_id)
+                log.info('cycle=%s stage=discovery_completed duration_ms=%.1f',
+                         cycle_id, (time.perf_counter() - stage_started) * 1000)
                 if not universe and not current:
                     status = 'waiting'
                     log.info('Discovery completed without an active universe; nothing to scan')
                     return 'empty'
                 if not current or (current['source'] == 'discovery' and
                                    current['date'] != now().date().isoformat() and universe):
+                    stage = 'discovery_snapshot'
                     snapshot_id = self.store.snapshot(tuple(universe), source='discovery')
                     self.store.activate(snapshot_id, expected_active=current['id'] if current else 0)
                     current = self.store.active_snapshot()
                 config = replace(config, symbols=tuple(universe))
                 results, errors = [], {}
+                stage = 'scan'
                 for symbol in config.symbols:
+                    symbol_started = time.perf_counter()
+                    log.info('cycle=%s symbol=%s stage=scan_started', cycle_id, symbol)
                     try:
                         # Reuse the complete existing pipeline with a one-symbol config.
                         results.extend(scan_watchlist(replace(config, symbols=(symbol,)), provider))
-                    except Exception:
+                    except Exception as exc:
+                        log.warning('cycle=%s symbol=%s stage=scan_failed duration_ms=%.1f error_type=%s',
+                                    cycle_id, symbol, (time.perf_counter() - symbol_started) * 1000,
+                                    error_category(exc))
                         log.warning('Market-data processing failed for %s; continuing', symbol)
                         results.append(ScanResult(symbol, source=provider.source))
                         errors[symbol] = 'Market-data request or calculation failed'
-                if not self.store.publish(current['id'], results, self.sector_map(), errors,
-                                          strategy_thresholds=config.forming, universe=universe):
+                    else:
+                        log.info('cycle=%s symbol=%s stage=scan_completed duration_ms=%.1f',
+                                 cycle_id, symbol, (time.perf_counter() - symbol_started) * 1000)
+                stage = 'publication'
+                stage_started = time.perf_counter()
+                log.info('cycle=%s stage=publication_started results=%s failures=%s',
+                         cycle_id, len(results), len(errors))
+                published = self.store.publish(current['id'], results, self.sector_map(), errors,
+                                               strategy_thresholds=config.forming, universe=universe)
+                log.info('cycle=%s stage=publication_completed duration_ms=%.1f published=%s',
+                         cycle_id, (time.perf_counter() - stage_started) * 1000, published)
+                if not published:
                     log.info('Watchlist changed during scan; discarded superseded results')
                     return 'superseded'
                 log.info('Published %s symbols (%s failures)', len(results), len(errors))
                 return 'scanned'
-            except Exception:
+            except Exception as exc:
+                log.warning('cycle=%s stage=%s_failed error_type=%s',
+                            cycle_id, stage, error_category(exc))
                 # Provider exception strings may include private configuration. Do not log them.
                 log.warning('Scan cycle failed; check credentials, database and sector configuration. Retrying next cycle.')
                 self.store.set_state(last_error='Scan failed. Check worker credentials, database and sector configuration.')
                 return 'failed'
             finally:
-                self.store.set_state(status=status, scanner_heartbeat=now())
+                try:
+                    self.store.set_state(status=status, scanner_heartbeat=now())
+                except Exception as exc:
+                    log.warning('cycle=%s stage=heartbeat_failed error_type=%s',
+                                cycle_id, error_category(exc))
+                    raise
 
 
 def main():

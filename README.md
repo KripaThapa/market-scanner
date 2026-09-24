@@ -41,6 +41,12 @@ The four experimental forming thresholds and their formulas are documented in [s
 
 ## Research and operations
 
+Scanner Reliability V1 applies 5-second HTTP connect and 20-second read-inactivity
+timeouts to live Alpaca candle/discovery requests. Private logs include cycle IDs,
+symbol/stage progress, durations, and sanitized failure categories. Processing
+remains sequential. See [architecture](docs/architecture.md#scanner-reliability-v1--implemented)
+for the SDK integration, heartbeat meaning, and remaining unbounded operations.
+
 The 08:00–10:00 Central window is for setup observations, **not** a cutoff for retaining future candle data. Append-only observations cover every active-universe symbol, including NONE states. Each stores strategy version, data provenance, discovery overlap, sector and execution-candle state. The nightly job computes objective future returns and excursions, without changing rules or declaring wins/losses. Run an idempotent backfill inside Docker with:
 
 ```sh

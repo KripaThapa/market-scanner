@@ -22,6 +22,50 @@ Alpaca/IEX -> MarketDataProvider -> normalized 1m candles -> 3m/10m aggregation
 
 The scanner worker refreshes eligible discovery sources independently, merges symbol membership, scans each symbol once, and publishes scan results. The market-data provider boundary isolates Alpaca SDK bars from aggregation, indicators, context, forming detection, collection, and outcomes. Alpaca/IEX remains the only candle provider. Alpaca Screener supplies Most Actives and Market Movers (gainer/loser) when the account permits; its source metadata is separate from IEX feed metadata. Provider failure is recorded per source and does not stop other sources.
 
+## Scanner Reliability V1 — IMPLEMENTED
+
+Live worker and CLI candle clients, the default Alpaca/IEX adapter, and the
+discovery screener use `ripster_scanner/alpaca_http.py`. Pinned `alpaca-py==0.44.0`
+does not expose constructor connect/read timeouts. Small client subclasses
+override its `_one_request` hook to copy request options and pass
+`timeout=(5, 20)` to the SDK's existing `requests.Session.request` call. This is
+instance-scoped: no global patch, new transport, or dependency. SDK upgrades must
+revalidate this private hook with the transport tests. Injected custom clients
+remain the caller's responsibility. Historical replay/baseline clients and the
+watchlist asset-directory/OCR path are unchanged.
+
+The SDK retains three retries with three-second sleeps for HTTP 429/504 (four
+attempts total per page); connect/read timeout exceptions propagate immediately
+to existing handlers. A symbol timeout produces the existing failed-symbol result
+and scanning proceeds sequentially. A discovery timeout retains last-known
+membership and marks that source FAILED; remaining sources still run, including
+the existing retry of movers for losers if the gainers fetch failed. No universe,
+strategy, or public DTO semantics change. Successful calculations and default
+strategy identity remain `experimental-forming-v1/b067b3150de3`.
+
+Each `run_once` gets a random cycle ID. Private logs report cycle start/completion,
+uploaded-universe count, discovery start/completion and per-source progress,
+every symbol start/completion/failure, and publication start/completion. Durations
+use a monotonic clock. Fixed error categories exclude exception messages,
+credentials, headers, URLs, and response bodies. `cycle_completed outcome=failed`
+means a handled failure returned; `published=False` means a newer watchlist
+superseded the result. Early empty/busy cycles omit stages they did not execute.
+
+The database heartbeat is unchanged: it updates at cycle entry and in cycle
+cleanup, not continuously during requests. It measures those progress points,
+not process liveness. Handled symbol timeouts allow publication and the final
+heartbeat/status update; a busy lock attempt does not update it. The configured
+scanner interval is a delay after the cycle, not a deadline.
+
+V1 is not a hard wall-clock guarantee. The read timeout limits socket inactivity,
+not total response duration. DNS resolution, slow trickling responses, unlimited
+SDK pagination, database statements/locks/pre-ping/commit/rollback, filesystem
+or logging I/O, and local calculations still lack a total deadline. No process
+isolation, concurrency, watchdog, schema change, or database timeout is introduced.
+Those remain later reliability phases. Tests inject transport timeouts without
+external requests or sleeps; they verify handling and timeout propagation, not
+real elapsed network timing.
+
 The existing deterministic Experimental Forming Setup V1 remains unchanged. A 10m candle gives context; 3m candles give setup development. The worker records whether the execution 3m candle was PARTIAL or COMPLETED and whether existing behavior considered it decision-eligible. The latest 3m candle may be partial. Candle timestamps are opening times.
 
 PostgreSQL migrations 0001–0005 preserve prior scanner/research tables. Migration `0006_discovery_sector_candle_state` adds `discovery_memberships`, `discovery_events`, `discovery_source_status`, `symbol_metadata`, `active_universe_members`, `sector_snapshots`, and `research_observation_sources`, plus nullable observation sector/candle-state/eligibility/snapshot links. Old observations retain unknown metadata. Membership tracks current same-day status; events preserve transitions; observation-source rows preserve overlap. Sector snapshots store objective counts. Indexed symbol/date/time/state fields support research queries.

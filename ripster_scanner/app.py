@@ -3,7 +3,7 @@
 import argparse
 from dataclasses import replace
 
-from alpaca.data.historical import StockHistoricalDataClient
+from .alpaca_http import StockHistoricalDataClient
 
 from .config import asset_directory_uses_paper, load_config
 from .display import print_watchlist_import, print_watchlist_summary

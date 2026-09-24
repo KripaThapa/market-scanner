@@ -8,7 +8,7 @@ class AlpacaDiscoveryProvider:
 
     def __init__(self, api_key, secret_key, *, client=None, top=10):
         if client is None:
-            from alpaca.data.historical.screener import ScreenerClient
+            from ripster_scanner.alpaca_http import ScreenerClient
             client = ScreenerClient(api_key, secret_key)
         self.client = client
         self.top = top

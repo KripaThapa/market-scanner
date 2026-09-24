@@ -20,7 +20,7 @@ class AlpacaIEXProvider:
 
     def __init__(self, api_key: str, secret_key: str, *, client=None):
         if client is None:
-            from alpaca.data.historical import StockHistoricalDataClient
+            from .alpaca_http import StockHistoricalDataClient
             client = StockHistoricalDataClient(api_key, secret_key)
         self.client = client
 

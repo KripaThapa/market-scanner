@@ -2,6 +2,7 @@
 
 from datetime import timezone
 import logging
+import time
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -10,6 +11,7 @@ from backend.database.models import (DiscoveryEvent, DiscoveryMembership,
     DiscoverySourceStatus, SymbolMetadata)
 from strategy_lab.market_calendar import USEquityMarketCalendar
 from .domain import AUTOMATIC_SOURCES, DiscoveryItem, SourceType, normalize_symbol
+from scanner.progress import error_category
 
 log = logging.getLogger(__name__)
 
@@ -53,7 +55,7 @@ class DiscoveryService:
                     source_type=source.value, provider=provider, discovered_at=at,
                     active=False, rank=row.rank, metrics=row.metrics))
 
-    def build_universe(self, uploaded_symbols, sector_mapping=None, *, at):
+    def build_universe(self, uploaded_symbols, sector_mapping=None, *, at, cycle_id=None):
         """Return unique symbols with every successful or last-known source."""
         at = at.astimezone(timezone.utc)
         trading_date = self.research_settings.local_date(at).isoformat()
@@ -81,11 +83,19 @@ class DiscoveryService:
                        .total_seconds() >= self.settings.interval_seconds)
                 if not due:
                     continue
+                started = time.perf_counter()
+                log.info('cycle=%s source=%s stage=discovery_source_started', cycle_id, source.value)
                 try:
                     results[source] = self.provider.fetch(source, at)
-                except Exception:
+                except Exception as exc:
                     results[source] = None
+                    log.warning('cycle=%s source=%s stage=discovery_source_failed duration_ms=%.1f error_type=%s',
+                                cycle_id, source.value, (time.perf_counter() - started) * 1000,
+                                error_category(exc))
                     log.warning('Discovery source %s failed; retaining its last-known membership', source.value)
+                else:
+                    log.info('cycle=%s source=%s stage=discovery_source_completed duration_ms=%.1f',
+                             cycle_id, source.value, (time.perf_counter() - started) * 1000)
         with Session(self.engine) as session, session.begin():
             self._record(session, SourceType.UPLOADED_WATCHLIST, uploaded, at,
                          trading_date, 'Uploaded Watchlist')
