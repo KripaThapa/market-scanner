@@ -23,7 +23,7 @@ x-scanner-environment: &scanner-environment
   TRADING_WINDOW_START: ${TRADING_WINDOW_START:-08:00}
   TRADING_WINDOW_END: ${TRADING_WINDOW_END:-10:00}
   TRADING_TIMEZONE: ${TRADING_TIMEZONE:-America/Chicago}
-  DISCOVERY_ENABLED: ${DISCOVERY_ENABLED:-true}
+  AUTO_DISCOVERY_ENABLED: ${AUTO_DISCOVERY_ENABLED:-false}
   DISCOVERY_INTERVAL_SECONDS: ${DISCOVERY_INTERVAL_SECONDS:-300}
   DISCOVERY_TOP_N: ${DISCOVERY_TOP_N:-10}
 
@@ -112,7 +112,7 @@ services:
     environment:
       <<: *scanner-environment
       SCANNER_INTERVAL_SECONDS: ${SCANNER_INTERVAL_SECONDS:-60}
-      SCANNER_JSON_FALLBACK: ${SCANNER_JSON_FALLBACK:-false}
+      FMP_API_KEY: ${FMP_API_KEY:-}
     volumes:
       - ./config:/app/config:ro
     depends_on:

@@ -60,6 +60,7 @@ test("Discovery shows a source-agnostic universe with sector filtering and symbo
   body.universe.push({
     ...row("MSFT", "BULLISH"),
     sector: "Software",
+    industry: "Software - Infrastructure",
     setup_state: "FORMING_LONG",
   });
   await mockAPI(page, body);
@@ -82,6 +83,12 @@ test("Discovery shows a source-agnostic universe with sector filtering and symbo
     .getByRole("button", { name: "Discovery" })
     .click();
   await expect(page.getByRole("link", { name: "MSFT →" })).toBeVisible();
+  await expect(
+    page.getByText("Software - Infrastructure", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("cell", { name: "Unknown", exact: true }),
+  ).toHaveCount(2);
   await expect(page.getByText("UPLOADED_WATCHLIST")).toHaveCount(0);
   await page.getByLabel("Sector").selectOption("Software");
   await expect(page.getByRole("link", { name: "NVDA →" })).toHaveCount(0);
@@ -313,6 +320,43 @@ test("dashboard names scanner results and does not count Unknown as a known sect
   const metric = page.locator(".metric").filter({ hasText: "Known sectors" });
   await expect(metric.locator("strong")).toHaveText("0");
   await expect(metric).toContainText("2 stocks missing sector data");
+});
+
+test("level triggers show original instructions separately from FORMING", async ({
+  page,
+}) => {
+  const body = fixture();
+  body.alerts = [
+    {
+      id: 701,
+      symbol: "NVDA",
+      timestamp: stamp,
+      alert_type: "WATCHLIST_LEVEL_LONG",
+      direction: "LONG",
+      trigger_level: "105.00000000",
+      price: 105.1401,
+      reason: "LONG > 105; Original instruction <unchanged>",
+    },
+    {
+      id: 702,
+      symbol: "AMD",
+      timestamp: stamp,
+      alert_type: "FORMING_SHORT",
+      price: 100,
+      reason: "Experimental forming state detected.",
+    },
+  ];
+  await mockAPI(page, body);
+  await page.goto("/");
+  await expect(
+    page.getByText("LEVEL TRIGGER · LONG", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("Above $105.00", { exact: true })).toBeVisible();
+  await expect(page.getByText("105.1401", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText(body.alerts[0].reason, { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("FORMING SHORT", { exact: true })).toBeVisible();
 });
 
 test("recent alerts refresh, open stock detail, and render persisted FORMING markers", async ({

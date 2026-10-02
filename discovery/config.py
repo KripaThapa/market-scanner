@@ -6,15 +6,15 @@ import os
 
 @dataclass(frozen=True)
 class DiscoverySettings:
-    enabled: bool = True
+    enabled: bool = False
     interval_seconds: int = 300
     top: int = 10
 
 
 def load_settings():
-    enabled = os.getenv('DISCOVERY_ENABLED', 'true').strip().lower()
+    enabled = os.getenv('AUTO_DISCOVERY_ENABLED', 'false').strip().lower()
     if enabled not in ('true', 'false'):
-        raise ValueError('DISCOVERY_ENABLED must be true or false')
+        raise ValueError('AUTO_DISCOVERY_ENABLED must be true or false')
     interval = int(os.getenv('DISCOVERY_INTERVAL_SECONDS', '300'))
     top = int(os.getenv('DISCOVERY_TOP_N', '10'))
     if interval < 30 or not 1 <= top <= 100:

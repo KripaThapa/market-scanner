@@ -8,21 +8,24 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.database.models import (DiscoveryEvent, DiscoveryMembership,
-    DiscoverySourceStatus, SymbolMetadata)
+    DiscoverySourceStatus)
 from strategy_lab.market_calendar import USEquityMarketCalendar
 from .domain import AUTOMATIC_SOURCES, DiscoveryItem, SourceType, normalize_symbol
 from scanner.progress import error_category
+from .metadata import SymbolMetadataService
 
 log = logging.getLogger(__name__)
 
 
 class DiscoveryService:
-    def __init__(self, engine, provider, settings, research_settings, *, equity_calendar=None):
+    def __init__(self, engine, provider, settings, research_settings, *, equity_calendar=None,
+                 metadata_service=None):
         self.engine = engine
         self.provider = provider
         self.settings = settings
         self.research_settings = research_settings
         self.equity_calendar = equity_calendar or USEquityMarketCalendar()
+        self.metadata_service = metadata_service or SymbolMetadataService(engine)
 
     @staticmethod
     def _record(session, source, items, at, trading_date, provider):
@@ -55,7 +58,7 @@ class DiscoveryService:
                     source_type=source.value, provider=provider, discovered_at=at,
                     active=False, rank=row.rank, metrics=row.metrics))
 
-    def build_universe(self, uploaded_symbols, sector_mapping=None, *, at, cycle_id=None):
+    def build_universe(self, uploaded_symbols, sector_mapping=None, *, at, cycle_id=None, context_symbols=()):
         """Return unique symbols with every successful or last-known source."""
         at = at.astimezone(timezone.utc)
         trading_date = self.research_settings.local_date(at).isoformat()
@@ -99,6 +102,10 @@ class DiscoveryService:
         with Session(self.engine) as session, session.begin():
             self._record(session, SourceType.UPLOADED_WATCHLIST, uploaded, at,
                          trading_date, 'Uploaded Watchlist')
+            context = [DiscoveryItem(symbol, SourceType.MARKET_CONTEXT, 'Market Context', at)
+                       for value in context_symbols if (symbol := normalize_symbol(value))]
+            self._record(session, SourceType.MARKET_CONTEXT, context, at,
+                         trading_date, 'Market Context')
             for source, items in results.items():
                 status = session.get(DiscoverySourceStatus, source.value)
                 if status is None:
@@ -119,6 +126,8 @@ class DiscoveryService:
                 DiscoveryMembership.active.is_(True))).all()
             universe = {}
             for row in memberships:
+                if row.source_type in AUTOMATIC_SOURCES and (not self.settings.enabled or not is_session):
+                    continue  # Disabled sources cannot contribute cached memberships either.
                 entry = universe.setdefault(row.symbol, {'symbol': row.symbol, 'sources': [],
                     'source_metrics': {}, 'sector': 'UNKNOWN', 'metadata_source': 'UNAVAILABLE'})
                 entry['sources'].append(row.source_type)
@@ -126,17 +135,8 @@ class DiscoveryService:
                     entry['source_metrics'][row.source_type] = row.metrics
             for symbol, entry in universe.items():
                 entry['sources'].sort()
-                sector = sector_mapping.get(symbol) or 'UNKNOWN'
-                metadata_source = 'config/sectors.json' if symbol in sector_mapping else 'UNAVAILABLE'
-                metadata = session.get(SymbolMetadata, symbol)
-                if metadata is None:
-                    metadata = SymbolMetadata(symbol=symbol, sector=sector, industry=None,
-                        metadata_source=metadata_source, retrieved_at=at, updated_at=at)
-                    session.add(metadata)
-                elif metadata.sector != sector or metadata.metadata_source != metadata_source:
-                    metadata.sector = sector
-                    metadata.metadata_source = metadata_source
-                    metadata.updated_at = at
-                entry['sector'] = metadata.sector
-                entry['metadata_source'] = metadata.metadata_source
-            return universe
+        # Discovery writes commit before optional network enrichment begins.
+        metadata = self.metadata_service.resolve(universe, sector_mapping, at=at)
+        for symbol, entry in universe.items():
+            entry.update(metadata[symbol])
+        return universe

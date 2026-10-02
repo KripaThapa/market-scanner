@@ -17,7 +17,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from backend.api import create_app
 from backend.database.models import Alert, AlertState, FormingSetup
 from backend.store import Store
-from db_support import test_store
+from db_support import test_store, activated_watchlist
 from ripster_scanner.config import Config, FormingThresholds
 from ripster_scanner.forming import FormingResult, SetupState
 from ripster_scanner.scan import ScanResult
@@ -226,12 +226,14 @@ class AlertTests(unittest.TestCase):
         from discovery.config import DiscoverySettings
         worker = ScannerWorker(self.store, discovery_settings=DiscoverySettings(False))
         result = observed()
+        activated_watchlist(self.store, ('AAA',), at=result.evaluated_at)
         def reject_alert(connection, cursor, statement, parameters, context, executemany):
             if statement.startswith('INSERT INTO alerts '):
                 raise RuntimeError('private write failure')
-        with patch('scanner.worker.load_config', return_value=Config('fake', 'fake', ('AAA',))), \
+        with patch('scanner.worker.load_config', side_effect=lambda *, symbols: Config('fake', 'fake', symbols)), \
              patch('scanner.worker.StockHistoricalDataClient'), \
-             patch('scanner.worker.scan_watchlist', return_value=[result]), \
+             patch('scanner.worker.scan_watchlist', side_effect=lambda config, provider:
+                   [result if config.symbols[0] == 'AAA' else ScanResult(config.symbols[0])]), \
              patch('scanner.worker.now', return_value=result.evaluated_at), \
              patch('backend.store.now', return_value=result.evaluated_at):
             event.listen(self.store.engine, 'before_cursor_execute', reject_alert)

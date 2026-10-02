@@ -17,7 +17,7 @@ from .security import PublicSecurityMiddleware
 
 def _public_universe(row):
     return {key: row.get(key) for key in
-            ('symbol', 'sector', 'percent_change', 'context_10m', 'context_3m',
+            ('symbol', 'sector', 'industry', 'percent_change', 'context_10m', 'context_3m',
              'setup_state', 'latest_price', 'candle_state', 'scanned_at')}
 
 

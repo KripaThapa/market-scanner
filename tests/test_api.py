@@ -24,6 +24,7 @@ from ripster_scanner.scan import ScanResult
 from ripster_scanner.forming import FormingResult, SetupState
 from ripster_scanner.watchlist_image import OCRToken
 from db_support import test_store
+from discovery.config import DiscoverySettings
 
 
 def image_bytes(format='PNG'):
@@ -394,7 +395,7 @@ class APITests(unittest.TestCase):
         with patch('scanner.worker.load_config', side_effect=lambda *, symbols: Config('fake', 'fake', symbols)), \
              patch('scanner.worker.StockHistoricalDataClient'), \
              patch('ripster_scanner.provider.fetch_one_minute_bars', return_value=bars()):
-            self.assertEqual(ScannerWorker(self.store).run_once(), 'scanned')
+            self.assertEqual(ScannerWorker(self.store, discovery_settings=DiscoverySettings(False)).run_once(), 'scanned')
         self.assertTrue(all(r['context_10m'] == 'BULLISH' for r in self.store.read()['watchlist']))
 
     def test_rejected_import_retains_previous_scan_and_rejections(self):

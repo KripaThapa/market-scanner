@@ -16,8 +16,9 @@ from backend.database.models import (BaselineDay, BaselineRun, BaselineSymbolDay
 from backend.store import Store
 from ripster_scanner.config import Config
 from ripster_scanner.scan import ScanResult
-from scanner.worker import ScannerWorker
-from db_support import test_store
+from scanner.worker import CONTEXT_SYMBOLS, ScannerWorker
+from db_support import test_store, activated_watchlist
+from discovery.config import DiscoverySettings
 
 
 def result(symbol):
@@ -28,6 +29,8 @@ def result(symbol):
 
 class WorkerTests(unittest.TestCase):
     def setUp(self):
+        patcher = patch('scanner.worker.load_discovery_settings', return_value=DiscoverySettings(False))
+        patcher.start(); self.addCleanup(patcher.stop)
         self.store = test_store(self)
         self.worker = ScannerWorker(self.store)
         patcher = patch('scanner.worker.load_config', side_effect=lambda *, symbols: Config('fake', 'fake', symbols))
@@ -38,18 +41,14 @@ class WorkerTests(unittest.TestCase):
         self.scan = patcher.start(); self.addCleanup(patcher.stop)
 
     def activate(self, symbols=('NVDA', 'AMD')):
-        snapshot = self.store.snapshot(symbols)
-        self.store.activate(snapshot)
-        return snapshot
+        return activated_watchlist(self.store, symbols)
 
-    def test_no_active_watchlist_stays_ready_and_does_not_load_credentials(self):
+    def test_no_active_watchlist_scans_context_and_remains_ready(self):
         for _ in range(2):
-            with self.assertLogs('scanner.worker', level='INFO') as logs:
-                self.assertEqual(self.worker.run_once(), 'empty')
-            self.assertIn('nothing to scan', '\n'.join(logs.output))
-        self.config.assert_not_called()
-        self.scan.assert_not_called()
-        self.assertEqual(self.store.state()['status'], 'waiting')
+            self.assertEqual(self.worker.run_once(), 'scanned')
+        self.assertEqual({call.args[0].symbols[0] for call in self.scan.call_args_list}, set(CONTEXT_SYMBOLS))
+        self.assertEqual(self.store.read()['watchlist'], [])
+        self.assertEqual(self.store.state()['status'], 'idle')
         self.assertIsNotNone(self.store.state()['scanner_heartbeat'])
 
     def test_worker_saves_results_and_indicator_values(self):
@@ -58,11 +57,13 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual([row['symbol'] for row in self.store.read()['watchlist']], ['NVDA', 'AMD'])
         with self.store.session() as session:
             rows = session.scalars(select(ScanResultModel)).all()
-            self.assertEqual(len(rows), 2)
+            self.assertEqual(len(rows), len(set(CONTEXT_SYMBOLS) | {'AMD'}))
             self.assertEqual(rows[0].ema_50, 117)
             self.assertEqual(rows[0].analysis_3m['ema_5'], 122)
         self.config.assert_called_once_with(symbols=('NVDA', 'AMD'))
-        self.assertEqual([call.args[0].symbols for call in self.scan.call_args_list], [('NVDA',), ('AMD',)])
+        symbols = [call.args[0].symbols[0] for call in self.scan.call_args_list]
+        self.assertEqual(set(symbols), set(CONTEXT_SYMBOLS) | {'AMD'})
+        self.assertEqual(symbols.count('NVDA'), 1)
 
     def test_ticker_failure_does_not_stop_other_symbols_or_next_cycle(self):
         self.activate(('NVDA', 'BAD', 'AMD'))
@@ -80,7 +81,7 @@ class WorkerTests(unittest.TestCase):
 
     def test_empty_market_data_still_publishes_other_symbols(self):
         self.activate()
-        self.scan.side_effect = [[ScanResult('NVDA')], [result('AMD')]]
+        self.scan.side_effect = lambda config, provider: [ScanResult('NVDA') if config.symbols[0] == 'NVDA' else result(config.symbols[0])]
         self.assertEqual(self.worker.run_once(), 'scanned')
         self.assertEqual(self.store.read()['watchlist'][0]['context_10m'], 'NO DATA')
 
@@ -96,7 +97,7 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(self.store.read()['watchlist'][0]['symbol'], 'TSLA')
         self.assertIsNone(self.store.current_snapshot())
 
-    def test_daily_rollover_and_restart_use_persisted_watchlist(self):
+    def test_out_of_calendar_range_does_not_reuse_arbitrary_old_watchlist(self):
         old = self.activate()
         future = datetime(2099, 1, 1, tzinfo=timezone.utc)
         with patch('scanner.worker.now', return_value=future), patch('backend.store.now', return_value=future):
@@ -104,6 +105,8 @@ class WorkerTests(unittest.TestCase):
             current = self.store.active_snapshot()
             self.assertNotEqual(current['id'], old)
             self.assertEqual(current['date'], '2099-01-01')
+            self.assertEqual(current['source'], 'context')
+            self.assertEqual(self.store.read()['watchlist'], [])
             self.assertEqual(ScannerWorker(Store(self.store.engine)).run_once(), 'scanned')
             self.assertEqual(self.store.active_snapshot()['id'], current['id'])
 
@@ -123,17 +126,10 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(self.worker.run_once(), 'busy')
         self.scan.assert_not_called()
 
-    def test_json_fallback_is_opt_in_and_never_overrides_an_upload(self):
-        with patch('scanner.worker.load_watchlist', return_value=('AMD',)) as fallback:
-            self.assertEqual(self.worker.run_once(), 'empty')
-            fallback.assert_not_called()
-            worker = ScannerWorker(self.store, json_fallback=True)
-            self.assertEqual(worker.run_once(), 'scanned')
-            fallback.assert_called_once()
-            self.activate(('NVDA',))
-            self.assertEqual(worker.run_once(), 'scanned')
-            fallback.assert_called_once()
-            self.assertEqual(self.store.active_snapshot()['symbols'], ['NVDA'])
+    def test_legacy_json_setting_cannot_add_unrelated_config_symbols(self):
+        with patch.dict('os.environ', {'SCANNER_JSON_FALLBACK': 'true'}):
+            self.assertEqual(self.worker.run_once(), 'scanned')
+        self.assertEqual({call.args[0].symbols[0] for call in self.scan.call_args_list}, set(CONTEXT_SYMBOLS))
 
     def test_sector_mapping_validation(self):
         with tempfile.TemporaryDirectory() as directory:

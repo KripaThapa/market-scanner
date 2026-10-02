@@ -241,7 +241,8 @@ test("Daily Watchlist stages extracted symbols for review and activates on confi
     async (route) => {
       active = {
         id: 41,
-        date: "2026-09-21",
+        date: "2026-09-22",
+        trading_date: "2026-09-21",
         validated_count: 2,
         symbols: ["NVDA", "AMD"],
       };
@@ -279,6 +280,7 @@ test("Daily Watchlist stages extracted symbols for review and activates on confi
   await expect(
     page.getByText("Today's watchlist is active — 2 symbols"),
   ).toBeVisible();
+  await expect(page.getByText("Today: 2026-09-21")).toBeVisible();
   await expect(
     page.getByText("It will be included on the scanner's next normal cycle."),
   ).toBeVisible();

@@ -94,7 +94,10 @@ export default function DailyWatchlist() {
           body: JSON.stringify({ snapshot_id: pending.snapshot_id }),
         },
       );
-      setToday({ date: result.active.date, active: result.active });
+      setToday({
+        date: result.active.trading_date || result.active.date,
+        active: result.active,
+      });
       window.localStorage.removeItem("dailyWatchlistSnapshotId");
       setPending(null);
     } catch (failure) {
@@ -165,6 +168,10 @@ export default function DailyWatchlist() {
         >
           <h3 id="extracted-title">Extracted Watchlist</h3>
           <p>Review the validated symbols before activation.</p>
+          <p>
+            All explicit LONG-above and SHORT-below price levels are monitored
+            automatically for this watchlist&apos;s New York trading date.
+          </p>
           {pending.validated_symbols?.length ? (
             <div className="table-scroll">
               <table>

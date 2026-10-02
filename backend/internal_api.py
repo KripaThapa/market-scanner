@@ -347,7 +347,7 @@ def create_internal_app(*, store=None, data_dir=None, replay_provider=None,
                      snapshot_id, (time.perf_counter() - started) * 1000)
             if snapshot is None:
                 raise HTTPException(404, 'Watchlist upload not found')
-            if snapshot['source'] != 'image' or snapshot['date'] != store.today_date():
+            if snapshot['source'] != 'image' or snapshot.get('trading_date') != store.today_date():
                 raise HTTPException(409, "Only today's uploaded watchlist can be activated")
             if snapshot['status'] != 'ready_for_review' or not snapshot['symbols']:
                 raise HTTPException(409, 'Watchlist is not ready for activation')

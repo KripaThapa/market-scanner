@@ -3,10 +3,11 @@
 ## Data flow
 
 ```text
-Uploaded watchlist ─┐
-Most Actives ────────┤
-Top Gainers ─────────┼─> normalized active universe ─> sector metadata
-Top Losers ──────────┘                                  │
+Selected daily upload ─┐
+Market context ────────┤
+Most Actives (opt-in) ─┤
+Top Gainers (opt-in) ─┼─> normalized active universe ─> sector metadata
+Top Losers (opt-in) ──┘                                  │
                                                         v
 Alpaca/IEX -> MarketDataProvider -> normalized 1m candles -> 3m/10m aggregation
                                                         │
@@ -20,7 +21,9 @@ Alpaca/IEX -> MarketDataProvider -> normalized 1m candles -> 3m/10m aggregation
                                                                  history, nightly outcomes
 ```
 
-The scanner worker refreshes eligible discovery sources independently, merges symbol membership, scans each symbol once, and publishes scan results. The market-data provider boundary isolates Alpaca SDK bars from aggregation, indicators, context, forming detection, collection, and outcomes. Alpaca/IEX remains the only candle provider. Alpaca Screener supplies Most Actives and Market Movers (gainer/loser) when the account permits; its source metadata is separate from IEX feed metadata. Provider failure is recorded per source and does not stop other sources.
+The scanner worker selects one activated upload (today, otherwise exactly the previous XNYS session), adds SPY/QQQ/MAGS and the seven individual MAG7 stocks, refreshes explicitly enabled discovery sources independently, merges symbol membership, scans each symbol once, and publishes scan results. The market-data provider boundary isolates Alpaca SDK bars from aggregation, indicators, context, forming detection, collection, and outcomes. Alpaca/IEX remains the only candle provider. Alpaca Screener supplies Most Actives and Market Movers (gainer/loser) when the account permits; its source metadata is separate from IEX feed metadata. Provider failure is recorded per source and does not stop other sources.
+
+Automatic discovery defaults off through `AUTO_DISCOVERY_ENABLED=false`. Historical uploads remain stored; older uploads never accumulate into the active universe. Previous-session fallback copies membership only, never daily level triggers. VIX spot data is unsupported by the stock/IEX pipeline. See [universe selection](discovery.md). No migration is required for this configuration/selection change.
 
 ## Scanner Reliability V1 — IMPLEMENTED
 
@@ -91,7 +94,7 @@ See [deployment](deployment.md) for release gates and handoff.
 
 Compose starts PostgreSQL, migration, public backend/frontend, private internal backend/Strategy Lab frontend, scanner, and research. Public frontend/backend and Strategy Lab bind to loopback. PostgreSQL, workers, and internal backend have no host ports. The public `backend.api:create_app` exposes sanitized scanner DTOs. `backend.internal_api:create_internal_app` contains private rules/research/replay/source-status/upload routes and is reachable only through the local private frontend proxy. This keeps private payloads and code out of the normal React client. Authentication and role enforcement are required before external private access. See [security](security.md).
 
-Configuration: `.env` supplies database/provider credentials, discovery refresh, research window, forming thresholds, CORS, and public rate limits. `config/sectors.json` may map symbols to sectors; unmapped symbols are UNKNOWN. No Finviz scraping, sector trading rule, entry signal, automated orders, or AI analysis is present.
+Configuration: `.env` supplies database/provider credentials, discovery refresh, research window, forming thresholds, CORS, and public rate limits. Sector Enrichment V1 uses a persistent provider-neutral reference cache with FMP as its first adapter; `config/sectors.json` is fallback only. See [metadata architecture and history policy](sector-enrichment.md). No Finviz scraping, sector trading rule, entry signal, automated orders, or AI analysis is present.
 
 ## Alert Foundation V1 — IMPLEMENTED
 
@@ -199,3 +202,11 @@ Deployment handoff: apply additive migration `0013` before starting the updated
 backend/scanner. This milestone does not run that migration against the application
 database. Preserve the schema on an application rollback: downgrading `0013` would
 remove alert evidence and durable state and must not be used after recording alerts.
+
+Sector Enrichment V1 adds migration `0014`, extending the existing reference cache and published universe industry field. FMP → SymbolMetadataProvider → SymbolMetadataService → persistent cache → scanner/research/alerts. It does not alter Alert Foundation transitions or historical snapshots.
+
+Watchlist Level Alerts V1 (`0015`): validated upload → fixed New York ingestion
+trading_date → whole-watchlist activation → durable level monitors → existing
+Alpaca/IEX one-minute close observations → immutable level events → web alerts.
+No FORMING, EMA, VWAP, volume or sector gate participates. See
+[level identity, expiry, price source and limitations](watchlist-level-alerts.md).

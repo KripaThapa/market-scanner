@@ -36,3 +36,16 @@ def test_store(test):
         config.attributes['connection'] = connection
         command.upgrade(config, 'head')
     return Store(engine)
+
+
+def activated_watchlist(store, symbols, *, at=None):
+    """Use the real validated-ingestion path for worker universe fixtures."""
+    from unittest.mock import patch
+    from backend.store import now
+    from ripster_scanner.watchlist import ExtractedWatchlistRow, validate_watchlist_rows
+    rows = tuple(ExtractedWatchlistRow(symbol, '', 99, (0, 0, 100, 20)) for symbol in symbols)
+    with patch('backend.store.now', return_value=at or now()):
+        snapshot = store.snapshot((), source='image')
+        store.update_import(snapshot, validate_watchlist_rows(rows, set(symbols)))
+        store.activate(snapshot)
+    return snapshot

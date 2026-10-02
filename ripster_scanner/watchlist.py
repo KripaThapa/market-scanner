@@ -160,9 +160,8 @@ def validate_watchlist_rows(rows: tuple[ExtractedWatchlistRow, ...], active_symb
     """Run the existing candidate checks after spatial row selection."""
     tokens = [OCRToken(row.symbol, row.confidence) for row in rows]
     imported = validate_candidates(tokens, active_symbols)
-    by_symbol = {}
-    for row in rows:
-        if row.symbol not in by_symbol or row.confidence > by_symbol[row.symbol].confidence:
-            by_symbol[row.symbol] = row
-    validated_rows = tuple(by_symbol[symbol] for symbol in imported.validated if symbol in by_symbol)
+    # Preserve every validated visual row: one symbol may have distinct levels
+    # on separate rows. Universe symbols remain deduplicated as before.
+    validated_rows = tuple(row for row in rows if row.symbol in imported.validated
+                           and MIN_OCR_CONFIDENCE <= row.confidence <= 100)
     return WatchlistImport(imported.candidates, imported.validated, imported.rejected, validated_rows)

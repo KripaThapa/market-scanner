@@ -1,6 +1,6 @@
 # Market Scanner
 
-A deterministic, rule-based market scanner with a React read-only client, FastAPI public API, PostgreSQL, scanner and nightly research workers. The current market-data provider is Alpaca/IEX. Discovery V1 merges an uploaded watchlist with Alpaca Screener Most Actives, Top Gainers, and Top Losers when available. Experimental Forming Setup V1 is a research heuristic, not an entry signal or official trading grade.
+A deterministic, rule-based market scanner with a React read-only client, FastAPI public API, PostgreSQL, scanner and nightly research workers. The current market-data provider is Alpaca/IEX. The scanner selects today’s activated uploaded watchlist, otherwise exactly the previous U.S. equity trading session’s upload, plus always-monitored market-context stocks/ETFs. Automatic discovery remains available but defaults off. Experimental Forming Setup V1 is a research heuristic, not an entry signal or official trading grade.
 
 ## Local development
 
@@ -10,7 +10,7 @@ A deterministic, rule-based market scanner with a React read-only client, FastAP
 
 Compose starts migration, PostgreSQL, public and internal backends, scanner worker, nightly research worker, public frontend, and private Strategy Lab frontend. Public frontend/backend and Strategy Lab ports bind to loopback; PostgreSQL, workers, and the internal backend expose no host ports. The Compose frontends serve compiled assets through unprivileged Nginx. External deployment still requires the controls in [security](docs/security.md).
 
-The public UI has Dashboard, Discovery, Forming Setups, Sectors, Alerts, Settings, and symbol OHLCV detail charts. It receives sanitized display data only. Upload, Rules, Research, provenance, and Strategy Lab are private/admin functions. Compose mounts the internal API only on its private network so the loopback-only Strategy Lab frontend can proxy to it. Authentication and ADMIN/RESEARCHER authorization are still required before any private service is exposed externally. For local test data, set `SCANNER_JSON_FALLBACK=true` and edit `config/watchlist.json`; the existing uploaded watchlist remains in PostgreSQL.
+The public UI has Dashboard, Discovery, Forming Setups, Sectors, Alerts, Settings, and symbol OHLCV detail charts. It receives sanitized display data only. Upload, Rules, Research, provenance, and Strategy Lab are private/admin functions. Compose mounts the internal API only on its private network so the loopback-only Strategy Lab frontend can proxy to it. Authentication and ADMIN/RESEARCHER authorization are still required before any private service is exposed externally. The scanner does not use the old JSON fallback; `config/watchlist.json` remains available to the standalone CLI.
 
 ## Configuration
 
@@ -18,7 +18,7 @@ The public UI has Dashboard, Discovery, Forming Setups, Sectors, Alerts, Setting
 | --- | --- | --- |
 | `MARKET_DATA_PROVIDER` | `alpaca_iex` | Provider-neutral scanner adapter selection; Alpaca/IEX only currently |
 | `ALPACA_API_KEY`, `ALPACA_SECRET_KEY` | empty | Server-side market data and screener credentials |
-| `DISCOVERY_ENABLED` | `true` | Automatic discovery during research window |
+| `AUTO_DISCOVERY_ENABLED` | `false` | Opt in to automatic discovery during the existing research window; disabled sources contribute no cached symbols |
 | `DISCOVERY_INTERVAL_SECONDS` | `300` | Minimum interval between source refresh attempts |
 | `DISCOVERY_TOP_N` | `10` | Screener result count requested |
 | `TRADING_WINDOW_START`, `TRADING_WINDOW_END`, `TRADING_TIMEZONE` | `08:00`, `10:00`, `America/Chicago` | Research observation window, start inclusive/end exclusive |
@@ -37,7 +37,7 @@ The public UI has Dashboard, Discovery, Forming Setups, Sectors, Alerts, Setting
 | `BASELINE_MAX_CATCHUP_TRADING_DAYS` | `5` | Maximum completed XNYS sessions checked by nightly catch-up |
 | `BASELINE_PROVIDER_RETRIES`, `BASELINE_RETRY_DELAY_SECONDS` | `3`, `2` | Bounded historical-provider retry/backoff |
 
-The four experimental forming thresholds and their formulas are documented in [strategy](docs/strategy.md). Optional read-only `config/sectors.json` maps symbols to sectors; missing mappings remain UNKNOWN. Alpaca's asset object does not currently supply sector/industry for this implementation. The scanner still processes UNKNOWN symbols.
+The four experimental forming thresholds and their formulas are documented in [strategy](docs/strategy.md). [Sector Enrichment V1](docs/sector-enrichment.md) uses FMP reference profiles via a provider-neutral persistent cache (7-day TTL; 24-hour failure retry). Set `FMP_API_KEY` locally to enable lookups. Optional `config/sectors.json` is fallback only. UNKNOWN symbols still scan; Alpaca/IEX remains the only price/candle provider. Licensing/public-display approval remains separate.
 
 ## Web FORMING alerts
 
@@ -46,6 +46,13 @@ decision-eligible 3-minute observations. Recent Alerts refreshes with the dashbo
 stock charts mark the actual persisted decision candle. Alert state survives
 provider failures, restarts and watchlist changes. Snapshots are immutable.
 FORMING is not a trade entry. Backtest and Discord delivery are not implemented.
+
+[Watchlist Level Alerts V1](docs/watchlist-level-alerts.md) automatically monitors
+all explicit LONG-above and SHORT-below levels when a validated daily watchlist is
+activated. The trading date is fixed at successful ingestion in America/New_York;
+levels expire that day and never carry forward. LEVEL TRIGGER events are independent
+of FORMING and retain the original watchlist note. Apply additive migration `0015`
+before using updated services; no application database has been migrated here.
 See [architecture](docs/architecture.md#alert-foundation-v1--implemented) for
 transition semantics, migration `0013`, evidence fields and limitations.
 
@@ -111,3 +118,5 @@ repository contains no Kubernetes manifests or cluster deployment scripts; see
 - [Strategy Lab](docs/strategy-lab.md): private visual replay and hard no-look-ahead boundary.
 
 Not implemented: NEAR_ENTRY, entry trigger, buy/sell signals, automated trading, automatic rule modification, AI/LLM research agent, ML/Transformer models, automated optimization, sector strength trading rules, market mover performance ranking, Finviz integration, options flow, news scoring, or Telegram alerts.
+
+See [active universe selection](docs/discovery.md) for exact New York dates, previous-session fallback, context symbols, and VIX limitations. `.env.example` and Compose default `AUTO_DISCOVERY_ENABLED=false`; the retired `DISCOVERY_ENABLED` name is ignored. Existing local `.env` values were not inspected or changed.

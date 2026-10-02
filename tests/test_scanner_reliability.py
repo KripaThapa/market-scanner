@@ -13,7 +13,7 @@ from requests import Response
 from requests.exceptions import ConnectTimeout, ReadTimeout
 
 from backend.database.models import DiscoverySourceStatus
-from db_support import test_store
+from db_support import test_store, activated_watchlist
 from discovery.alpaca import AlpacaDiscoveryProvider
 from discovery.config import DiscoverySettings
 from discovery.service import DiscoveryService
@@ -23,7 +23,7 @@ from ripster_scanner.config import Config, FormingThresholds
 from ripster_scanner.provider import AlpacaIEXProvider
 from ripster_scanner.scan import scan_watchlist
 from ripster_scanner.strategy import strategy_version_id
-from scanner.worker import ScannerWorker
+from scanner.worker import CONTEXT_SYMBOLS, ScannerWorker
 from test_discovery import FakeDiscoveryProvider, MORNING
 from test_watchlist import bars
 
@@ -108,8 +108,10 @@ class HTTPTimeoutTests(unittest.TestCase):
 class WorkerReliabilityTests(unittest.TestCase):
     def setUp(self):
         self.store = test_store(self)
-        snapshot = self.store.snapshot(('AAA', 'BBB'), source='image')
-        self.store.activate(snapshot)
+        activated_watchlist(self.store, ('AAA', 'BBB'), at=MORNING)
+        for target in ('scanner.worker.now', 'backend.store.now'):
+            clock = patch(target, return_value=MORNING)
+            clock.start(); self.addCleanup(clock.stop)
         patcher = patch('scanner.worker.load_config', side_effect=lambda *, symbols:
                         Config('fake', 'fake', symbols))
         patcher.start()
@@ -132,7 +134,7 @@ class WorkerReliabilityTests(unittest.TestCase):
                      self.assertLogs(level='INFO') as captured:
                     self.assertEqual(worker.run_once(), 'scanned')
                     self.assertEqual(worker.run_once(), 'scanned')
-                self.assertEqual(attempted, ['AAA', 'BBB', 'AAA', 'BBB'])
+                self.assertEqual(attempted, (['AAA', 'BBB'] + list(CONTEXT_SYMBOLS)) * 2)
                 state = self.store.state()
                 self.assertEqual(state['status'], 'idle')
                 self.assertIsNotNone(state['scanner_heartbeat'])
@@ -152,7 +154,7 @@ class WorkerReliabilityTests(unittest.TestCase):
                     self.assertIn(f'cycle={cycle} symbol=AAA stage=scan_started', messages)
                     self.assertRegex(messages, f'cycle={cycle} symbol=AAA stage=scan_failed duration_ms=[0-9.]+ error_type={category}')
                     self.assertRegex(messages, f'cycle={cycle} symbol=BBB stage=scan_completed duration_ms=[0-9.]+')
-                    self.assertIn(f'cycle={cycle} stage=publication_started results=2 failures=1', messages)
+                    self.assertIn(f'cycle={cycle} stage=publication_started results=12 failures=1', messages)
                     for stage in ('discovery', 'publication', 'cycle'):
                         self.assertRegex(messages, f'cycle={cycle} stage={stage}_completed duration_ms=[0-9.]+')
 
@@ -178,7 +180,7 @@ class WorkerReliabilityTests(unittest.TestCase):
             for source in ('MOST_ACTIVE', 'TOP_GAINER', 'TOP_LOSER'):
                 self.assertEqual(session.get(DiscoverySourceStatus, source).status, 'FAILED')
         universe = {row['symbol'] for row in self.store.read()['universe']}
-        self.assertEqual(universe, {'AAA', 'BBB', 'AMD', 'NVDA', 'TSLA'})
+        self.assertEqual(universe, {'AAA', 'BBB', 'AMD'} | set(CONTEXT_SYMBOLS))
         messages = '\n'.join(captured.output)
         self.assertNotIn('private-discovery-secret', messages)
         self.assertEqual(messages.count('stage=discovery_source_failed'), 3)

@@ -9,6 +9,7 @@ from typing import Protocol
 
 class SourceType(StrEnum):
     UPLOADED_WATCHLIST = 'UPLOADED_WATCHLIST'
+    MARKET_CONTEXT = 'MARKET_CONTEXT'
     MOST_ACTIVE = 'MOST_ACTIVE'
     TOP_GAINER = 'TOP_GAINER'
     TOP_LOSER = 'TOP_LOSER'

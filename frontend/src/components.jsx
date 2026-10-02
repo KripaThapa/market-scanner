@@ -219,12 +219,31 @@ export const alertColumns = (openSymbol) => [
   {
     key: "alert_type",
     label: "State",
-    render: (state) => state?.replaceAll("_", " "),
+    render: (state) =>
+      state?.startsWith("WATCHLIST_LEVEL_")
+        ? `LEVEL TRIGGER · ${state.endsWith("LONG") ? "LONG" : "SHORT"}`
+        : state?.replaceAll("_", " "),
+  },
+  {
+    key: "trigger_level",
+    label: "Trigger",
+    render: (value, row) =>
+      value == null
+        ? "—"
+        : `${row.direction === "LONG" ? "Above" : "Below"} $${Number(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 8 })}`,
   },
   {
     key: "price",
     label: "Price",
-    render: (price) => (price == null ? "—" : Number(price).toFixed(2)),
+    render: (price, row) =>
+      price == null
+        ? "—"
+        : row.alert_type?.startsWith("WATCHLIST_LEVEL_")
+          ? Number(price).toLocaleString("en-US", {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 8,
+            })
+          : Number(price).toFixed(2),
   },
   { key: "context_10m", label: "10m context" },
   { key: "reason", label: "Reason" },

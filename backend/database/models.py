@@ -1,7 +1,8 @@
 """Persistent data, not additional strategy rules. Schema changes require Alembic."""
 
 from datetime import datetime
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
+from decimal import Decimal
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -13,6 +14,7 @@ class WatchlistUpload(Base):
     __tablename__ = 'watchlist_uploads'
     id: Mapped[int] = mapped_column(primary_key=True)
     date: Mapped[str] = mapped_column(String(10))
+    trading_date: Mapped[str | None] = mapped_column(String(10))
     source: Mapped[str] = mapped_column(String(20))
     original_filename: Mapped[str | None] = mapped_column(String(180))
     stored_filename: Mapped[str | None] = mapped_column(Text)
@@ -36,6 +38,7 @@ class WatchlistSymbol(Base):
     validation_status: Mapped[str] = mapped_column(String(20))
     rejection_reason: Mapped[str | None] = mapped_column(Text)
     original_note: Mapped[str | None] = mapped_column(Text)
+    level_instructions: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
@@ -86,7 +89,9 @@ class Alert(Base):
     __tablename__ = 'alerts'
     __table_args__ = (UniqueConstraint('symbol', 'strategy_version', 'transition_number',
                                        name='uq_alert_transition'),
-                      Index('ix_alert_symbol_candle', 'symbol', 'decision_candle_at'))
+                      Index('ix_alert_symbol_candle', 'symbol', 'decision_candle_at'),
+                      Index('uq_alert_level_key', 'level_key', unique=True))
+    level_key: Mapped[str | None] = mapped_column(String(100))
     transition_number: Mapped[int | None] = mapped_column(Integer)
     strategy_version: Mapped[str | None] = mapped_column(ForeignKey('strategy_versions.id', name='fk_alert_strategy_version'))
     decision_candle_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -98,6 +103,25 @@ class Alert(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     destination: Mapped[str | None] = mapped_column(Text)
     delivery_status: Mapped[str | None] = mapped_column(Text)
+
+
+class WatchlistLevelMonitor(Base):
+    """Daily durable level identity, independent of FORMING and watchlist replacement."""
+    __tablename__ = 'watchlist_level_monitors'
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    watchlist_date: Mapped[str] = mapped_column(String(10), index=True)
+    symbol: Mapped[str] = mapped_column(String(20), index=True)
+    direction: Mapped[str] = mapped_column(String(5))
+    trigger_level: Mapped[Decimal] = mapped_column(Numeric(24, 8))
+    original_note: Mapped[str | None] = mapped_column(Text)
+    source_watchlist_id: Mapped[int] = mapped_column(ForeignKey('watchlist_uploads.id'))
+    source_row_id: Mapped[int] = mapped_column(Integer)
+    source_bbox: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean)
+    activated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    previous_price: Mapped[Decimal | None] = mapped_column(Numeric(24, 8))
+    previous_bar_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    previous_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AlertState(Base):
@@ -278,6 +302,15 @@ class SymbolMetadata(Base):
     symbol: Mapped[str] = mapped_column(String(20), primary_key=True)
     sector: Mapped[str] = mapped_column(String(100), index=True)
     industry: Mapped[str | None] = mapped_column(String(120))
+    company_name: Mapped[str | None] = mapped_column(String(240))
+    cik: Mapped[str | None] = mapped_column(String(20))
+    isin: Mapped[str | None] = mapped_column(String(20))
+    cusip: Mapped[str | None] = mapped_column(String(20))
+    exchange: Mapped[str | None] = mapped_column(String(80))
+    country: Mapped[str | None] = mapped_column(String(80))
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_refresh_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_status: Mapped[str | None] = mapped_column(String(20))
     metadata_source: Mapped[str] = mapped_column(String(80))
     retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -292,6 +325,7 @@ class ActiveUniverseMember(Base):
     sources: Mapped[list] = mapped_column(JSON)
     source_metrics: Mapped[dict] = mapped_column(JSON)
     sector: Mapped[str] = mapped_column(String(100))
+    industry: Mapped[str | None] = mapped_column(String(120))
     candle_state: Mapped[str | None] = mapped_column(String(12))
     decision_eligible: Mapped[bool] = mapped_column(Boolean)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

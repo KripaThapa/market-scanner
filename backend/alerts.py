@@ -120,13 +120,17 @@ def collect_alerts(session, results, errors, sectors, timestamp, thresholds):
 
 def alert_row(alert):
     snapshot = alert.snapshot or {}
-    return {'id': alert.id, 'symbol': alert.symbol,
+    result = {'id': alert.id, 'symbol': alert.symbol,
             'timestamp': _stored_utc(alert.created_at).isoformat(),
             'alert_type': alert.alert_type, 'reason': alert.reason,
             'price': snapshot.get('price'),
             'context_10m': snapshot.get('frames', {}).get('10m', {}).get('context'),
             'decision_candle_at': _stored_utc(alert.decision_candle_at).isoformat()
                 if alert.decision_candle_at else None}
+    if alert.alert_type in {'WATCHLIST_LEVEL_LONG', 'WATCHLIST_LEVEL_SHORT'}:
+        result.update(direction=snapshot.get('direction'), trigger_level=snapshot.get('trigger_level'))
+        result['timestamp'] = snapshot.get('crossing_timestamp', result['timestamp'])
+    return result
 
 
 def chart_alerts(session, symbol, candles):
@@ -149,6 +153,9 @@ def public_alert(row):
               ('id', 'symbol', 'timestamp', 'alert_type', 'price', 'context_10m')}
     result['reason'] = ('Experimental forming state detected.'
                         if row.get('alert_type') in {'FORMING_LONG', 'FORMING_SHORT'} else None)
+    if row.get('alert_type') in {'WATCHLIST_LEVEL_LONG', 'WATCHLIST_LEVEL_SHORT'}:
+        result.update(direction=row.get('direction'), trigger_level=row.get('trigger_level'),
+                      reason=row.get('reason'))
     return result
 
 

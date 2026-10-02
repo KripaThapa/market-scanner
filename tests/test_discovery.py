@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from backend.database.models import (ActiveUniverseMember, DiscoveryEvent,
     DiscoveryMembership, DiscoverySourceStatus, SectorSnapshot, SymbolMetadata,
     ResearchObservation)
-from db_support import test_store
+from db_support import test_store, activated_watchlist
 from discovery.candle_state import candle_state
 from discovery.alpaca import AlpacaDiscoveryProvider
 from discovery.config import DiscoverySettings
@@ -21,7 +21,7 @@ from research.repository import ResearchRepository
 from ripster_scanner.config import Config
 from ripster_scanner.forming import FormingResult, SetupState
 from ripster_scanner.scan import ScanResult
-from scanner.worker import ScannerWorker
+from scanner.worker import CONTEXT_SYMBOLS, ScannerWorker
 
 MORNING = datetime(2026, 9, 18, 13, 30, tzinfo=timezone.utc)
 
@@ -120,8 +120,7 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(active[0].provider, 'Alpaca Screener')
 
     def test_universe_scanned_once_and_sector_snapshot_is_objective(self):
-        snapshot = self.store.snapshot(('AMD', 'MSFT'), source='image')
-        self.store.activate(snapshot)
+        activated_watchlist(self.store, ('AMD', 'MSFT'), at=MORNING)
         worker = ScannerWorker(self.store, discovery_provider=self.provider,
                                discovery_settings=DiscoverySettings(True, 300, 10))
         with patch('scanner.worker.now', return_value=MORNING), \
@@ -139,13 +138,13 @@ class DiscoveryTests(unittest.TestCase):
              patch.object(worker, 'sector_map', return_value={
                  'AMD': 'Technology', 'MSFT': 'Technology'}):
             self.assertEqual(worker.run_once(), 'scanned')
-        self.assertEqual(len(scan.call_args_list), 4)
+        self.assertEqual(len(scan.call_args_list), 11)
         scanned_symbols = [call.args[0].symbols[0] for call in scan.call_args_list]
-        self.assertEqual(set(scanned_symbols), {'AMD', 'MSFT', 'NVDA', 'TSLA'})
+        self.assertEqual(set(scanned_symbols), set(CONTEXT_SYMBOLS) | {'AMD'})
         self.assertEqual(scanned_symbols.count('AMD'), 1)  # Upload + Alpaca overlap.
         self.assertIn('MSFT', scanned_symbols)  # Upload-only symbol remains eligible.
         internal = self.store.read()
-        self.assertEqual(len(internal['universe']), 4)
+        self.assertEqual(len(internal['universe']), 11)
         self.assertEqual(len(internal['watchlist']), 2)
         technology = next(item for item in internal['sectors'] if item['sector'] == 'Technology')
         self.assertEqual((technology['symbol_count'], technology['bullish_count'],
@@ -153,7 +152,7 @@ class DiscoveryTests(unittest.TestCase):
         with self.store.session() as session:
             self.assertEqual(session.scalar(select(func.count()).select_from(SectorSnapshot)), 2)
             observations = session.scalars(select(ResearchObservation)).all()
-            self.assertEqual(len(observations), 4)
+            self.assertEqual(len(observations), 11)
             self.assertEqual(next(row for row in observations if row.symbol == 'AMD').discovery_sources,
                              ['MOST_ACTIVE', 'TOP_GAINER', 'UPLOADED_WATCHLIST'])
         research = ResearchRepository(self.store.engine)
@@ -162,7 +161,7 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual({r['symbol'] for r in research.list_observations(
             sector='Technology')}, {'AMD', 'MSFT'})
         self.assertEqual(len(research.list_observations(candle_state='COMPLETED')), 0)
-        self.assertEqual(len(research.list_observations(decision_eligible=False)), 4)
+        self.assertEqual(len(research.list_observations(decision_eligible=False)), 11)
 
     def _run_automatic_worker(self, at):
         worker = ScannerWorker(self.store, discovery_provider=self.provider,
@@ -183,14 +182,14 @@ class DiscoveryTests(unittest.TestCase):
             self.assertGreater(session.scalar(select(func.count()).select_from(
                 DiscoveryMembership)), 0)
             self.assertGreater(session.scalar(select(func.count()).select_from(
-                ActiveUniverseMember)), 0)
+                ActiveUniverseMember)), len(CONTEXT_SYMBOLS))
 
     def test_automatic_discovery_skips_weekend_and_xnys_holiday_inside_window(self):
         for at in (datetime(2026, 9, 20, 13, 30, tzinfo=timezone.utc),
                    datetime(2026, 7, 3, 13, 30, tzinfo=timezone.utc)):
             self.provider.calls.clear()
             with self.subTest(at=at):
-                self.assertEqual(self._run_automatic_worker(at), 'empty')
+                self.assertEqual(self._run_automatic_worker(at), 'scanned')
             self.assertEqual(self.provider.calls, [])
 
     def test_discovery_service_itself_fails_closed_on_non_session(self):
@@ -203,17 +202,18 @@ class DiscoveryTests(unittest.TestCase):
         snapshot = self.store.snapshot(('AMD',), source='discovery')
         self.store.activate(snapshot)
         self.assertEqual(self._run_automatic_worker(
-            datetime(2026, 9, 20, 13, 30, tzinfo=timezone.utc)), 'empty')
+            datetime(2026, 9, 20, 13, 30, tzinfo=timezone.utc)), 'scanned')
         self.assertEqual(self.provider.calls, [])
+        self.assertEqual({row['symbol'] for row in self.store.read()['universe']}, set(CONTEXT_SYMBOLS))
         with self.store.session() as session:
             self.assertEqual(session.scalar(select(func.count()).select_from(
-                ActiveUniverseMember)), 0)
+                ActiveUniverseMember)), len(CONTEXT_SYMBOLS))
             self.assertEqual(session.scalar(select(func.count()).select_from(
-                ResearchObservation)), 0)
+                ResearchObservation)), len(CONTEXT_SYMBOLS))
 
     def test_automatic_discovery_skips_outside_window_on_valid_session(self):
         self.assertEqual(self._run_automatic_worker(
-            datetime(2026, 9, 18, 17, 0, tzinfo=timezone.utc)), 'empty')
+            datetime(2026, 9, 18, 17, 0, tzinfo=timezone.utc)), 'scanned')
         self.assertEqual(self.provider.calls, [])
 
 

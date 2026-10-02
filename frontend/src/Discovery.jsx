@@ -50,6 +50,11 @@ export default function Discovery({ rows, openSymbol }) {
               ),
             },
             { key: "sector", label: "Sector" },
+            {
+              key: "industry",
+              label: "Industry",
+              render: (value) => value || "Unknown",
+            },
             { key: "latest_price", label: "Price" },
             {
               key: "percent_change",

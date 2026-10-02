@@ -132,7 +132,8 @@ class Store:
 
     @staticmethod
     def today_date():
-        return now().date().isoformat()
+        from .level_alerts import trading_date
+        return trading_date(now())
 
     def current_snapshot_for_activation(self, snapshot_id):
         with self.session() as session:
@@ -144,11 +145,19 @@ class Store:
 
     @staticmethod
     def _symbols(session, upload_id, symbols, rejected, timestamp, rows=()):
+        from ripster_scanner.watchlist_levels import parse_levels
         session.execute(delete(WatchlistSymbol).where(WatchlistSymbol.watchlist_upload_id == upload_id))
-        notes = {row.symbol: row.original_note for row in rows}
+        notes, instructions = {}, {}
+        for row in rows:
+            notes.setdefault(row.symbol, row.original_note)
+            for level in parse_levels(row.original_note):
+                instructions.setdefault(row.symbol, []).append({
+                    'direction': level.direction, 'trigger_level': str(level.price),
+                    'original_note': row.original_note, 'source_bbox': row.as_dict()['source_bbox']})
         for symbol in symbols:
             session.add(WatchlistSymbol(watchlist_upload_id=upload_id, symbol=symbol,
                                        validation_status='validated', original_note=notes.get(symbol),
+                                       level_instructions=instructions.get(symbol, []),
                                        created_at=timestamp))
         for item in rejected:
             session.add(WatchlistSymbol(watchlist_upload_id=upload_id, symbol=item['candidate'],
@@ -156,12 +165,15 @@ class Store:
 
     def update_import(self, snapshot_id, imported):
         from dataclasses import asdict
+        from .level_alerts import trading_date
         with self.session() as session:
             upload = session.get(WatchlistUpload, snapshot_id)
             upload.candidates = list(imported.candidates)
             upload.candidate_count = len(imported.candidates)
             upload.validated_count = len(imported.validated)
             upload.processed_at = now()
+            if upload.source == 'image' and imported.validated and upload.trading_date is None:
+                upload.trading_date = trading_date(upload.processed_at)
             upload.processing_claimed_at = None
             upload.processing_status = 'ready_for_review'
             self._symbols(session, snapshot_id, imported.validated,
@@ -169,6 +181,8 @@ class Store:
 
     def activate(self, snapshot_id, *, expected_active=None):
         """Compare-and-set protects fallback/day rollover from racing a new upload."""
+        from .level_alerts import activate_levels, trading_date
+        from .database.models import WatchlistLevelMonitor
         with self.session() as session:
             state = session.get(AppState, 1, with_for_update=True)
             if expected_active is not None and (state.active_watchlist_id or 0) != expected_active:
@@ -176,6 +190,16 @@ class Store:
             upload = session.get(WatchlistUpload, snapshot_id)
             if not upload.validated_count:
                 raise ValueError('Cannot activate an empty watchlist')
+            timestamp = now()
+            if upload.source == 'image' and upload.trading_date is not None:
+                if upload.trading_date != trading_date(timestamp):
+                    raise ValueError('Level monitors require a watchlist ingested today in America/New_York')
+                activate_levels(session, upload, date=upload.trading_date, at=timestamp)
+            else:
+                # Legacy uploads and scanner rollovers never inherit daily levels.
+                for monitor in session.scalars(select(WatchlistLevelMonitor).where(
+                        WatchlistLevelMonitor.active.is_(True))):
+                    monitor.active = False
             state.active_watchlist_id = snapshot_id
             for setup in session.scalars(select(FormingSetup).where(FormingSetup.active.is_(True))):
                 setup.active = False
@@ -197,7 +221,7 @@ class Store:
             return None
         symbols = session.scalars(select(WatchlistSymbol).where(
             WatchlistSymbol.watchlist_upload_id == upload.id).order_by(WatchlistSymbol.id)).all()
-        return {'id': upload.id, 'date': upload.date, 'source': upload.source,
+        return {'id': upload.id, 'date': upload.date, 'trading_date': upload.trading_date, 'source': upload.source,
                 'filename': upload.original_filename, 'created_at': iso(upload.uploaded_at),
                 'processed_at': iso(upload.processed_at), 'status': upload.processing_status,
                 'candidate_count': upload.candidate_count, 'validated_count': upload.validated_count,
@@ -223,9 +247,22 @@ class Store:
     def today_active_uploaded_snapshot(self):
         """Return today's active image upload without exposing it through public reads."""
         active = self.active_snapshot()
-        if active and active['source'] == 'image' and active['date'] == now().date().isoformat():
+        if active and active['source'] == 'image' and active['trading_date'] == self.today_date():
             return active
         return None
+
+    def scanner_watchlist(self, today, previous_day=None):
+        """Exactly one activated image upload from either allowed date; never older."""
+        dates = [today] + ([previous_day] if previous_day else [])
+        with self.session() as session:
+            upload = session.scalar(select(WatchlistUpload).where(
+                WatchlistUpload.source == 'image',
+                WatchlistUpload.trading_date.in_(dates),
+                WatchlistUpload.processing_status.in_(('queued', 'scanned')),
+                WatchlistUpload.validated_count > 0,
+            ).order_by(WatchlistUpload.trading_date.desc(),
+                       WatchlistUpload.processed_at.desc(), WatchlistUpload.id.desc()).limit(1))
+            return self.snapshot_dict(session, upload)
 
     def latest_upload(self):
         with self.session() as session:
@@ -233,12 +270,13 @@ class Store:
                 WatchlistUpload.source == 'image').order_by(WatchlistUpload.id.desc()).limit(1)).first())
 
     def publish(self, snapshot_id, results, sector_map=None, errors=None, *,
-                research_settings=None, strategy_thresholds=None, universe=None):
+                research_settings=None, strategy_thresholds=None, universe=None, price_observations=None):
         timestamp, sectors = now(), {}
         sector_map, errors = sector_map or {}, errors or {}
         from research.config import load_settings
         from research.collector import collect_publication
         from .alerts import collect_alerts
+        from .level_alerts import collect_level_alerts
         from ripster_scanner.config import forming_thresholds
         from discovery.candle_state import candle_state
         research_settings = research_settings or load_settings()
@@ -306,6 +344,7 @@ class Store:
                     sources=member.get('sources', []),
                     source_metrics=member.get('source_metrics', {}),
                     sector=sector_map.get(result.symbol, 'UNKNOWN'),
+                    industry=member.get('industry'),
                     candle_state=candle, decision_eligible=result.has_data and
                     result.symbol not in errors, updated_at=timestamp))
                 forming = result.forming
@@ -344,6 +383,7 @@ class Store:
                     symbols=group['symbols'], symbol_count=len(group['symbols']),
                     bullish_count=group['bullish'], bearish_count=group['bearish'], calculated_at=timestamp))
             collect_alerts(session, results, errors, sector_map, timestamp, strategy_thresholds)
+            collect_level_alerts(session, snapshot_id, price_observations or {}, timestamp)
             upload.processing_status = 'scanned'
             upload.error = None
             state.current_snapshot = snapshot_id
@@ -365,7 +405,7 @@ class Store:
                 ActiveUniverseMember.snapshot_id == snapshot_id).order_by(
                     ActiveUniverseMember.symbol)).all()
             rows = []
-            watchlist_symbols = (active['symbols'] if active and active['source'] != 'discovery' else [])
+            watchlist_symbols = (active['symbols'] if active and active['source'] not in {'discovery', 'context'} else [])
             for symbol in watchlist_symbols:
                 r = by_symbol.get(symbol)
                 rows.append({'symbol': symbol, 'snapshot_id': snapshot_id,
@@ -381,7 +421,7 @@ class Store:
                     FormingSetup.snapshot_id == snapshot_id,
                     FormingSetup.symbol == member.symbol, FormingSetup.active.is_(True)))
                 mover = member.source_metrics.get('TOP_GAINER') or member.source_metrics.get('TOP_LOSER') or {}
-                universe.append({'symbol': member.symbol, 'sector': member.sector,
+                universe.append({'symbol': member.symbol, 'sector': member.sector, 'industry': member.industry,
                     'sources': member.sources, 'source_metrics': member.source_metrics,
                     'percent_change': mover.get('percent_change'),
                     'context_10m': r.context_10m if r else 'PENDING',

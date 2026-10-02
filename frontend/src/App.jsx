@@ -17,7 +17,8 @@ const descriptions = {
   Dashboard: "A clear view of stocks scanned and market context.",
   Discovery: "The current scanning universe and market context.",
   "Forming Setups": "Developing states reported by the scanner.",
-  Alerts: "Experimental FORMING transition events. No trade entries.",
+  Alerts:
+    "Watchlist level triggers and experimental FORMING events. No trade entries.",
   Sectors: "Objective counts across stocks scanned.",
   Settings: "A preview of future scanner configuration.",
 };
@@ -235,7 +236,7 @@ export default function App() {
                 {[
                   [
                     "Alert configuration",
-                    "Web FORMING alerts are automatic. Delivery settings are not yet available.",
+                    "Web alerts are automatic. Delivery settings are not yet available.",
                     5,
                   ],
                   [

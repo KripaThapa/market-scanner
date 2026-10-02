@@ -107,7 +107,7 @@ export function Dashboard({ data, navigate, openSymbol }) {
       <div className="dashboard-grid">
         <Panel
           title="Recent Alerts"
-          subtitle="Completed-candle FORMING transitions"
+          subtitle="Watchlist level triggers and completed-candle FORMING transitions"
           action={
             <button className="text-button" onClick={() => navigate("Alerts")}>
               View all →
@@ -118,8 +118,8 @@ export function Dashboard({ data, navigate, openSymbol }) {
             label="recent alerts"
             rows={(data?.alerts || []).slice(0, 5)}
             columns={alertColumns(openSymbol)}
-            emptyTitle="No FORMING alerts yet"
-            emptyText="Experimental FORMING transitions will appear here. FORMING is not a trade entry."
+            emptyTitle="No alerts yet"
+            emptyText="Watchlist level triggers and experimental FORMING transitions will appear here. FORMING is not a trade entry."
           />
         </Panel>
         <Panel
@@ -166,7 +166,7 @@ export function Sectors({ sectors, rows }) {
   return (
     <>
       <div className="notice">
-        Sector data shows objective counts. Symbols without configured sector
+        Sector data shows objective counts. Symbols without known sector
         metadata appear as UNKNOWN.
       </div>
       <Panel

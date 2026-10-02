@@ -6,6 +6,12 @@ Treat every browser and scanner API caller as untrusted. A shared deployment mus
 
 The mounted public FastAPI app exposes read-only `/api/dashboard`, `/api/discovery`, `/api/setups/forming`, `/api/alerts`, `/api/sectors`, `/api/sectors/{sector}`, `/api/symbols/{symbol}`, `/api/symbols/{symbol}/chart`, and `/health`. Public DTOs whitelist display fields. They omit discovery source membership, watchlist/image identity, rule thresholds, strategy versions, research data, diagnostics, raw exceptions, and provider credentials. Symbol charts return OHLCV only. Public input uses bounded symbol/sector patterns and a 3m/10m timeframe enum. No public historical pagination endpoint is mounted.
 
+Watchlist level events additionally expose direction, numeric trigger level and the
+original watchlist instruction as explicitly authorized display content. Upload/row
+IDs, bounding boxes, trading-date identity, previous observations, provider/feed and
+other evidence remain private. React renders notes as text. No author branding is
+inserted. FORMING explanations retain their existing sanitized DTO behavior.
+
 `backend.internal_api:create_internal_app` contains rules, research, Strategy Lab, discovery-source status, and watchlist-upload routes. Compose runs it on the private application network without a host port. The loopback-bound Strategy Lab frontend proxies `/api/internal` to it. This is network and application separation, not authentication: do not expose either private service externally. Before enabling it for external users, add a mature identity provider or maintained auth integration, enforce SCANNER_USER versus ADMIN/RESEARCHER authorization server-side, audit administrative actions, and test denied access. No custom cryptography or authentication protocol is used.
 
 ## Request controls

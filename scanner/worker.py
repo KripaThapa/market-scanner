@@ -1,6 +1,7 @@
 """Polling PostgreSQL worker. Ticker failures never terminate the service."""
 
 from dataclasses import replace
+from datetime import date
 import json
 import logging
 import os
@@ -12,27 +13,34 @@ from uuid import uuid4
 
 from ripster_scanner.alpaca_http import StockHistoricalDataClient
 from scanner.progress import error_category
+from scanner.price_observation import PriceObservingProvider
+from backend.level_alerts import trading_date
 from backend.store import Store, now
 from discovery.alpaca import AlpacaDiscoveryProvider
-from discovery.config import DiscoverySettings, load_settings as load_discovery_settings
+from discovery.config import load_settings as load_discovery_settings
 from discovery.service import DiscoveryService
+from discovery.metadata import SymbolMetadataService
+from discovery.fmp import FMPMetadataProvider
 from research.config import load_settings as load_research_settings
-from ripster_scanner.config import load_config, load_watchlist
+from ripster_scanner.config import load_config
 from ripster_scanner.provider import build_provider
 from ripster_scanner.scan import ScanResult, scan_watchlist
 from strategy_lab.market_calendar import USEquityMarketCalendar
 
 log = logging.getLogger(__name__)
 
+# US stocks/ETFs use the existing Alpaca/IEX bar path. Spot VIX is unsupported.
+CONTEXT_SYMBOLS = ('SPY', 'QQQ', 'MAGS', 'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA')
+
 
 class ScannerWorker:
-    def __init__(self, store, *, json_fallback=False, sector_path='config/sectors.json',
-                 discovery_provider=None, discovery_settings=None):
+    def __init__(self, store, *, sector_path='config/sectors.json',
+                 discovery_provider=None, discovery_settings=None, metadata_service=None):
         self.store = store
-        self.json_fallback = json_fallback
         self.sector_path = Path(sector_path)
         self.discovery_provider = discovery_provider
         self.discovery_settings = discovery_settings
+        self.metadata_service = metadata_service or SymbolMetadataService(store.engine)
         self.equity_calendar = USEquityMarketCalendar()
 
     def sector_map(self):
@@ -68,88 +76,53 @@ class ScannerWorker:
             try:
                 self.store.set_state(status='scanning', last_attempt=now(), scanner_heartbeat=now())
                 stage = 'universe_load'
-                current = self.store.active_snapshot()
-                if not current and self.json_fallback:
-                    snapshot_id = self.store.snapshot(load_watchlist())
-                    if not self.store.activate(snapshot_id, expected_active=0):
-                        self.store.fail(snapshot_id, 'Superseded by a validated upload')
-                    current = self.store.active_snapshot()
-                log.info('cycle=%s stage=universe_loaded uploaded_symbols=%s', cycle_id,
-                         len(current['symbols']) if current and current['source'] != 'discovery' else 0)
-                stage = 'configuration'
-                settings = self.discovery_settings or load_discovery_settings()
-                # Existing SQLite-backed tests and the standalone CLI keep their
-                # existing watchlist-only path unless a fake source is injected.
-                if self.store.engine.dialect.name != 'postgresql' and self.discovery_provider is None:
-                    settings = DiscoverySettings(False, settings.interval_seconds, settings.top)
-                research_settings = load_research_settings()
                 current_time = now()
-                inside_window = research_settings.inside_window(current_time)
-                session_date = research_settings.local_date(current_time)
+                today = trading_date(current_time)
                 try:
-                    is_session = self.equity_calendar.is_session(session_date)
+                    previous_day = self.equity_calendar.adjacent(date.fromisoformat(today), 'previous').isoformat()
                 except ValueError:
-                    # Outside the bundled exchange calendar's supported range,
-                    # fail closed for automatic discovery but keep active scans alive.
-                    is_session = False
-                    log.warning('XNYS session status unavailable for %s; automatic discovery skipped',
-                                session_date.isoformat())
-                can_discover = settings.enabled and inside_window and is_session
-                if not current and not can_discover:
-                    status = 'waiting'
-                    if not settings.enabled:
-                        log.info('Automatic discovery is disabled; no active watchlist; nothing to scan')
-                    elif not inside_window:
-                        log.info('Outside research window; no active watchlist; nothing to scan')
-                    elif not is_session:
-                        log.info('Non-XNYS session %s; automatic discovery skipped',
-                                 session_date.isoformat())
-                    return 'empty'
-                if current:
-                    log.info('Active universe available (%s symbols); scanning',
-                             len(current['symbols']))
-                    if settings.enabled and inside_window and not is_session:
-                        log.info('Non-XNYS session %s; automatic discovery skipped',
-                                 session_date.isoformat())
-                    if current['source'] == 'discovery' and not is_session:
-                        status = 'waiting'
-                        log.info('Discovery-sourced active universe is not scanned outside XNYS sessions')
-                        return 'empty'
-                if current and current['date'] != now().date().isoformat() and current['source'] != 'discovery':
-                    stage = 'rollover'
-                    snapshot_id = self.store.snapshot(current['symbols'], source='rollover')
-                    if not self.store.activate(snapshot_id, expected_active=current['id']):
-                        self.store.fail(snapshot_id, 'Superseded by a newer watchlist')
-                        return 'superseded'
-                    current = self.store.active_snapshot()
-                uploaded = tuple(current['symbols']) if current and current['source'] != 'discovery' else ()
+                    previous_day = None
+                    log.warning('XNYS session unavailable for %s; watchlist fallback skipped', today)
+                current = self.store.active_snapshot()
+                selected = self.store.scanner_watchlist(today, previous_day)
+                uploaded = tuple(selected['symbols']) if selected else ()
+                if selected and selected['trading_date'] == today:
+                    if not current or current['id'] != selected['id']:
+                        if not self.store.activate(selected['id'], expected_active=current['id'] if current else 0):
+                            return 'superseded'
+                    current = selected
+                else:
+                    # Membership-only snapshot: never re-activate yesterday's daily levels.
+                    source = 'rollover' if selected else 'context'
+                    symbols = uploaded or CONTEXT_SYMBOLS
+                    if (not current or current['source'] != source
+                            or trading_date(current['created_at']) != today
+                            or tuple(current['symbols']) != symbols):
+                        snapshot_id = self.store.snapshot(symbols, source=source)
+                        if not self.store.activate(snapshot_id, expected_active=current['id'] if current else 0):
+                            self.store.fail(snapshot_id, 'Superseded by a newer watchlist')
+                            return 'superseded'
+                        # Keep our publication identity even if an upload activates now.
+                        current = self.store.upload_status(snapshot_id)
+                log.info('cycle=%s stage=universe_loaded uploaded_symbols=%s', cycle_id, len(uploaded))
+                settings = self.discovery_settings or load_discovery_settings()
+                research_settings = load_research_settings()
                 stage = 'configuration'
                 config = load_config(symbols=uploaded)
                 provider = build_provider(config, client=StockHistoricalDataClient(
                     config.api_key, config.secret_key))
+                provider = PriceObservingProvider(provider)
                 discovery_provider = (self.discovery_provider or
                     AlpacaDiscoveryProvider(config.api_key, config.secret_key, top=settings.top)
                     if settings.enabled else self.discovery_provider)
-                cycle_settings = (settings if is_session else DiscoverySettings(
-                    False, settings.interval_seconds, settings.top))
                 stage = 'discovery'
                 stage_started = time.perf_counter()
                 log.info('cycle=%s stage=discovery_started', cycle_id)
-                universe = DiscoveryService(self.store.engine, discovery_provider, cycle_settings,
-                    research_settings).build_universe(uploaded, self.sector_map(), at=current_time,
-                                                     cycle_id=cycle_id)
+                universe = DiscoveryService(self.store.engine, discovery_provider, settings,
+                    research_settings, metadata_service=self.metadata_service).build_universe(uploaded, self.sector_map(), at=current_time,
+                                                     cycle_id=cycle_id, context_symbols=CONTEXT_SYMBOLS)
                 log.info('cycle=%s stage=discovery_completed duration_ms=%.1f',
                          cycle_id, (time.perf_counter() - stage_started) * 1000)
-                if not universe and not current:
-                    status = 'waiting'
-                    log.info('Discovery completed without an active universe; nothing to scan')
-                    return 'empty'
-                if not current or (current['source'] == 'discovery' and
-                                   current['date'] != now().date().isoformat() and universe):
-                    stage = 'discovery_snapshot'
-                    snapshot_id = self.store.snapshot(tuple(universe), source='discovery')
-                    self.store.activate(snapshot_id, expected_active=current['id'] if current else 0)
-                    current = self.store.active_snapshot()
                 config = replace(config, symbols=tuple(universe))
                 results, errors = [], {}
                 stage = 'scan'
@@ -173,8 +146,11 @@ class ScannerWorker:
                 stage_started = time.perf_counter()
                 log.info('cycle=%s stage=publication_started results=%s failures=%s',
                          cycle_id, len(results), len(errors))
+                if trading_date(now()) != today:
+                    return 'superseded'  # Re-select membership after a midnight-spanning fetch.
                 published = self.store.publish(current['id'], results, self.sector_map(), errors,
-                                               strategy_thresholds=config.forming, universe=universe)
+                                               strategy_thresholds=config.forming, universe=universe,
+                                               price_observations=provider.observations)
                 log.info('cycle=%s stage=publication_completed duration_ms=%.1f published=%s',
                          cycle_id, (time.perf_counter() - stage_started) * 1000, published)
                 if not published:
@@ -199,15 +175,16 @@ class ScannerWorker:
 
 
 def main():
+    from dotenv import load_dotenv
+    load_dotenv()
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     interval = int(os.getenv('SCANNER_INTERVAL_SECONDS', '60'))
     if interval < 1:
         raise ValueError('SCANNER_INTERVAL_SECONDS must be a positive integer')
-    fallback = os.getenv('SCANNER_JSON_FALLBACK', 'false').lower()
-    if fallback not in {'true', 'false'}:
-        raise ValueError('SCANNER_JSON_FALLBACK must be true or false')
     store = Store()
-    worker = ScannerWorker(store, json_fallback=fallback == 'true')
+    key = os.getenv('FMP_API_KEY', '').strip()
+    metadata = SymbolMetadataService(store.engine, FMPMetadataProvider(key) if key else None)
+    worker = ScannerWorker(store, metadata_service=metadata)
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())
