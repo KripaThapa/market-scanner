@@ -72,7 +72,7 @@ docker compose run --rm research python -m research.job --date 2026-09-18
 
 Private research/rules/replay endpoints are not host-published; the local Strategy Lab proxies to the internal container. Do not expose this private UI or internal app beyond loopback until authentication is added. Proposed rules are hypotheses and cannot mutate production scanner logic.
 
-Strategy Lab V1 persists a one-minute historical snapshot, advances on completed 3m boundaries, rebuilds the current 10m candle from only known minutes, and records `NOT_YET`, `INTERESTING`, or `WOULD_CONSIDER_ENTRY` with free text. Equity replay is implemented. MES replay is unavailable because Alpaca/IEX has no futures historical-data client; V1 returns a capability error rather than substituting data. See [Strategy Lab](docs/strategy-lab.md).
+Strategy Lab V1 defaults to chart-first review of daily watchlist stocks and scanner events: date → uploaded watchlist symbol → 10m/3m charts, episode-based FORMING markers, structured supplied levels, separate recorded level crossings, and compatible retrospective outcomes. Raw observations remain stored but are not the primary UI. No strategy rules or trade recommendations are added. Existing blind equity replay remains available; MES replay is unavailable with the current provider. See [Strategy Lab](docs/strategy-lab.md).
 
 Equity replay dates are validated against the XNYS exchange calendar. Weekend and market-holiday selections return `MARKET_CLOSED` with adjacent trading days; an expected-open date with no usable provider bars returns the separate `NO_DATA` condition. Futures do not inherit the equity calendar.
 

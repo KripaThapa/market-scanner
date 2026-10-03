@@ -1,5 +1,12 @@
 import { test, expect } from "@playwright/test";
 
+test.beforeEach(async ({ page }) => {
+  await page.route(
+    "**/api/internal/strategy-lab/review/watchlist?**",
+    (route) => route.fulfill({ json: { symbols: [] } }),
+  );
+});
+
 const stamp = (minute) => `2026-09-18T13:${minute}:00+00:00`;
 const priorStamp = (minute) => `2026-09-17T13:${minute}:00+00:00`;
 const candle = (minute) => ({
@@ -149,6 +156,7 @@ test("private replay advances visually, saves free text, and reveals only explic
     }),
   );
   await page.goto("/");
+  await page.getByRole("button", { name: "Replay", exact: true }).click();
   await page.getByRole("combobox", { name: "Stock" }).fill("SP");
   await page.getByRole("option", { name: "SPY" }).click();
   await page.getByRole("button", { name: "Start blind replay" }).click();
@@ -256,6 +264,7 @@ test("Daily Watchlist stages extracted symbols for review and activates on confi
     },
   );
   await page.goto("/");
+  await page.getByRole("button", { name: "Replay", exact: true }).click();
   await page.getByRole("button", { name: "Daily Watchlist" }).click();
   await expect(page.getByText("Today: 2026-09-21")).toBeVisible();
   await page.getByLabel("Upload Screenshot").setInputFiles({
@@ -316,6 +325,7 @@ test("Daily Watchlist stops polling when processing fails", async ({
     },
   );
   await page.goto("/");
+  await page.getByRole("button", { name: "Replay", exact: true }).click();
   await page.getByRole("button", { name: "Daily Watchlist" }).click();
   await page.getByLabel("Upload Screenshot").setInputFiles({
     name: "failed.png",
@@ -391,6 +401,7 @@ test("Rules tab separates active FORMING rules from non-filtering proposals", as
     }),
   );
   await page.goto("/");
+  await page.getByRole("button", { name: "Replay", exact: true }).click();
   await page.getByRole("button", { name: "Rules" }).click();
   await expect(
     page.getByText("experimental-forming-v1/b067b3150de3"),
@@ -423,6 +434,7 @@ test("calendar, historical groups, keyboard search, and session defaults", async
     return route.fulfill({ status: 201, json: replay() });
   });
   await page.goto("/");
+  await page.getByRole("button", { name: "Replay", exact: true }).click();
   await expect(page.getByText("Trading day", { exact: true })).toBeVisible();
   await expect(page.getByText("Calendar month", { exact: true })).toBeVisible();
   await expect(
@@ -467,6 +479,7 @@ test("random case uses only the selected historical universe without outcome req
   page.on("request", (request) => requested.push(request.url()));
   await mockCreationData(page);
   await page.goto("/");
+  await page.getByRole("button", { name: "Replay", exact: true }).click();
   await page.getByRole("button", { name: "Pick random case" }).click();
   const selected = await page.locator(".combobox-field small").textContent();
   expect(universe.symbols).toContain(selected.replace("Selected: ", ""));
@@ -543,6 +556,7 @@ test("private historical baseline shows denominators and episode drilldown", asy
       }),
   );
   await page.goto("/");
+  await page.getByRole("button", { name: "Replay", exact: true }).click();
   await page.getByRole("button", { name: "Historical baseline" }).click();
   await expect(
     page.getByRole("heading", { name: "Historical Strategy Baseline" }),
@@ -588,6 +602,7 @@ test("all missing-universe sessions are reported as unavailable coverage", async
     (route) => route.fulfill({ json: { items: [] } }),
   );
   await page.goto("/");
+  await page.getByRole("button", { name: "Replay", exact: true }).click();
   await page.getByRole("button", { name: "Historical baseline" }).click();
   await expect(
     page.getByRole("heading", { name: "Historical universe unavailable" }),
@@ -656,6 +671,7 @@ test("fixed research universe can be started and is clearly labeled as what-if",
     (route) => route.fulfill({ json: { items: [] } }),
   );
   await page.goto("/");
+  await page.getByRole("button", { name: "Replay", exact: true }).click();
   await page.getByRole("button", { name: "Historical baseline" }).click();
   await page.getByLabel("Symbols (comma or space separated)").fill("nvda, amd");
   await page
@@ -681,6 +697,7 @@ test("custom equity time, empty-universe manual fallback, and futures separation
     groups: [],
   });
   await page.goto("/");
+  await page.getByRole("button", { name: "Replay", exact: true }).click();
   await expect(
     page.getByText("No scanner universe was recorded for this date."),
   ).toBeVisible();

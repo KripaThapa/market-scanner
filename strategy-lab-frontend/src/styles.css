@@ -640,3 +640,199 @@ button:disabled {
     flex-direction: column;
   }
 }
+
+/* Chart-first review: the canvas owns the page, supporting details stay quiet. */
+.chart-review {
+  margin-top: 28px;
+}
+.review-controls {
+  display: flex;
+  align-items: end;
+  gap: 20px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid #253344;
+}
+.review-controls label {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+  color: #aebac7;
+}
+.review-controls select {
+  min-width: 190px;
+}
+.review-controls p,
+.review-heading p,
+.review-note {
+  color: #91a2b5;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.review-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 26px;
+}
+.review-heading h2 {
+  font-size: 30px;
+  letter-spacing: 0.02em;
+}
+.review-heading > span {
+  color: #91a2b5;
+  font-size: 12px;
+}
+.review-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 250px;
+  gap: 28px;
+}
+.review-charts {
+  min-width: 0;
+}
+.chart-review .chart-card {
+  border: 0;
+  border-radius: 6px;
+  padding: 18px 12px;
+  margin: 10px 0 22px;
+}
+.chart-review .chart-card h2 {
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  color: #cbd7e3;
+}
+.chart-review .chart-card header {
+  align-items: center;
+  margin-bottom: 14px;
+  gap: 10px;
+}
+.chart-review .chart-card header span {
+  font-size: 10px;
+  color: #8497ab;
+}
+.chart-review .chart-card footer {
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  color: #8497ab;
+  line-height: 1.5;
+}
+.review-details {
+  padding: 22px 0;
+}
+.review-details h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 12px;
+}
+.review-events {
+  display: grid;
+  gap: 3px;
+  max-height: 240px;
+  overflow-y: auto;
+  margin-bottom: 24px;
+}
+.review-events button {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  background: transparent;
+  padding: 12px 8px;
+  border-radius: 4px;
+  text-align: left;
+}
+.review-events strong {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+.review-events time {
+  font-size: 11px;
+  color: #b0bdca;
+  white-space: nowrap;
+}
+.review-events .level-event strong {
+  color: #e8bb70;
+}
+.review-events .forming-event strong {
+  color: #a3dacc;
+}
+.review-events button:hover,
+.review-events button[aria-pressed="true"] {
+  background: #202e3c;
+}
+.event-detail,
+.review-outcome {
+  padding: 20px 0;
+  border-top: 1px solid #253344;
+}
+.event-detail p {
+  font-size: 12px;
+  color: #91a2b5;
+  line-height: 1.6;
+}
+.review-details dl {
+  display: grid;
+  gap: 15px;
+  font-size: 12px;
+}
+.review-details dl > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.review-details dt {
+  color: #91a2b5;
+}
+.review-details dd {
+  margin: 0;
+  text-transform: capitalize;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.review-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  color: #aab9c9;
+  font-size: 11px;
+}
+.review-levels {
+  font-size: 12px;
+  color: #d9b779;
+}
+.review-empty {
+  padding: 80px 0;
+  color: #91a2b5;
+  text-align: center;
+}
+@media (max-width: 1000px) {
+  .review-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .review-details {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+  }
+  .review-details > h3,
+  .review-details > p,
+  .review-events {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 600px) {
+  .review-controls {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .review-controls p {
+    margin: 0;
+  }
+  .review-details {
+    display: block;
+  }
+  .lab-tabs {
+    flex-wrap: wrap;
+  }
+}

@@ -1,5 +1,7 @@
 # Architecture
 
+**IMPLEMENTED — Lab V1 read model:** `strategy_lab/review.py` reads existing watchlist, research candle, immutable alert, completed live-baseline episode and outcome records through batched SQL queries. The internal app alone serves `GET /api/internal/strategy-lab/review/watchlist` and `/review/chart`. The public app has no review routes. DTOs omit provider/debug metadata and strategy configuration; underlying evidence is retained. Review never runs a detector, fetches provider data or writes historical records. See [chart review](strategy-lab.md#daily-chart-review) for candle revision and outcome semantics.
+
 ## Data flow
 
 ```text

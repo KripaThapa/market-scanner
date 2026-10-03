@@ -1,5 +1,7 @@
 # Public scanner frontend
 
+**IMPLEMENTED — private Lab V1:** The separate Strategy Lab build defaults to chart-first review of daily watchlist stocks and scanner events. Date → uploaded watchlist symbol → 10m/3m charts replaces raw observations as the primary navigation. `ChartReview` supplies compact event details and retrospective outcomes; the shared `Chart` uses Lightweight Charts candlesticks, EMA clouds (`EmaCloud`), VWAP, supplied structured levels and distinct FORMING/level markers. Missing data stays unavailable. See [Lab review semantics and limitations](strategy-lab.md#daily-chart-review). The existing dark theme is supported; light-theme switching is not implemented.
+
 The React client is untrusted. It renders server-classified results and never computes context, forming state, sector decisions, or strategy thresholds. The shared UI is source-agnostic and read-only.
 
 Pages: Dashboard (Stocks scanned, Scanner results, known-sector and forming counts), Discovery (active universe, sector filter, symbol navigation), Forming Setups (active states), Sectors (objective counts and symbol drill-down), Alerts (watchlist level triggers and completed-candle FORMING events), Settings (non-editable status), and `/symbols/{symbol}` (scanner-backed 3m/10m OHLCV candlesticks). The symbol chart shows raw scanner-persisted candles for visual context. EMA/VWAP calculations and detector reasons remain internal. There is no browser-side independent market-data fetch.

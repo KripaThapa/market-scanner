@@ -173,6 +173,17 @@ def create_internal_app(*, store=None, data_dir=None, replay_provider=None,
     def replay_universe(date_value: str = Query(alias='date', pattern=r'^\d{4}-\d{2}-\d{2}$')):
         return replay_catalog.for_date(date_value)
 
+    @app.get('/api/internal/strategy-lab/review/watchlist')
+    def review_watchlist(date_value: str = Query(alias='date', pattern=r'^\d{4}-\d{2}-\d{2}$')):
+        from strategy_lab.review import ChartReviewRepository
+        return replay_call(lambda: ChartReviewRepository(store.engine).watchlist(date_value))
+
+    @app.get('/api/internal/strategy-lab/review/chart')
+    def review_chart(date_value: str = Query(alias='date', pattern=r'^\d{4}-\d{2}-\d{2}$'),
+                     symbol: str = Query(min_length=1, max_length=20, pattern=r'^[A-Z][A-Z0-9.-]*$')):
+        from strategy_lab.review import ChartReviewRepository
+        return replay_call(lambda: ChartReviewRepository(store.engine).chart(date_value, symbol))
+
     @app.get('/api/internal/strategy-lab/baseline')
     def historical_baseline(run_id: int | None = Query(default=None, ge=1)):
         report = baseline().report(run_id)

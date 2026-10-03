@@ -7,11 +7,21 @@ import {
   createChart,
 } from "lightweight-charts";
 
+import EmaCloud from "./EmaCloud";
+
+const EMPTY = [];
 const colors = {
   ema_5: "#4dd6a8",
   ema_12: "#62a8ff",
   ema_34: "#f0b65b",
   ema_50: "#d77df0",
+  vwap: "#e7e9ed",
+};
+const reviewColors = {
+  ema_5: "#70b9a9",
+  ema_12: "#52897e",
+  ema_34: "#8ca4cc",
+  ema_50: "#627699",
   vwap: "#e7e9ed",
 };
 const formatter = (timezone, options) =>
@@ -41,7 +51,10 @@ export default function Chart({
   timezone,
   sessionStart,
   replayTime,
-  markers = [],
+  markers = EMPTY,
+  levels = EMPTY,
+  review = false,
+  onEventSelect,
 }) {
   const node = useRef(null);
   const tooltip = useRef(null);
@@ -61,7 +74,7 @@ export default function Chart({
     if (!node.current || !candles.length) return;
     const chart = createChart(node.current, {
       width: node.current.clientWidth,
-      height: 300,
+      height: review && title.startsWith("3 MIN") ? 410 : 300,
       layout: {
         background: { type: ColorType.Solid, color: "#111821" },
         textColor: "#aebac7",
@@ -85,6 +98,27 @@ export default function Chart({
     }));
     const byTime = new Map(normalized.map((row) => [row.time, row]));
     const bars = chart.addSeries(CandlestickSeries, {
+      ...(review && levels.length
+        ? {
+            autoscaleInfoProvider: (original) => {
+              const info = original();
+              if (!info) return info;
+              return {
+                ...info,
+                priceRange: {
+                  minValue: Math.min(
+                    info.priceRange.minValue,
+                    ...levels.map((l) => l.price),
+                  ),
+                  maxValue: Math.max(
+                    info.priceRange.maxValue,
+                    ...levels.map((l) => l.price),
+                  ),
+                },
+              };
+            },
+          }
+        : {}),
       upColor: "#42cf9b",
       downColor: "#ef7880",
       borderVisible: false,
@@ -100,32 +134,82 @@ export default function Chart({
         close,
       })),
     );
-    createSeriesMarkers(
-      bars,
-      markers.map((marker) => ({
-        time: Math.floor(Date.parse(marker.timestamp) / 1000),
-        position: marker.state === "FORMING_LONG" ? "belowBar" : "aboveBar",
-        color: marker.state === "FORMING_LONG" ? "#42cf9b" : "#ef7880",
-        shape: marker.state === "FORMING_LONG" ? "arrowUp" : "arrowDown",
-        text: marker.state,
-      })),
-    );
+    const visibleMarkers = review
+      ? markers.filter((m) => m.chart_time)
+      : markers;
+    const mappedMarkers = visibleMarkers
+      .map((marker) => {
+        const state = marker.type || marker.state;
+        const long = state.endsWith("LONG");
+        const level = state.startsWith("WATCHLIST_LEVEL");
+        return {
+          id: marker.id,
+          time: Math.floor(
+            Date.parse(review ? marker.chart_time : marker.timestamp) / 1000,
+          ),
+          position: long ? "belowBar" : "aboveBar",
+          color: level ? "#e8bb70" : long ? "#57c9ac" : "#eb9298",
+          shape: level ? "circle" : long ? "arrowUp" : "arrowDown",
+          text: review
+            ? `${level ? "LEVEL" : "FORMING"} ${long ? "LONG" : "SHORT"} · ${chartTime(Math.floor(Date.parse(marker.timestamp) / 1000), timezone)}`
+            : state,
+        };
+      })
+      .sort((a, b) => a.time - b.time);
+    createSeriesMarkers(bars, mappedMarkers);
+    if (review) {
+      bars.attachPrimitive(
+        new EmaCloud(normalized, "ema_5", "ema_12", "rgba(77,214,168,0.10)"),
+      );
+      bars.attachPrimitive(
+        new EmaCloud(normalized, "ema_34", "ema_50", "rgba(98,168,255,0.09)"),
+      );
+      for (const level of levels)
+        bars.createPriceLine({
+          price: level.price,
+          color: "#d9b779",
+          lineWidth: 1,
+          lineStyle: 2,
+          axisLabelVisible: true,
+          title: `${level.direction} $${Number(level.price).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 8 })} · supplied`,
+        });
+      chart.subscribeClick((param) => {
+        const event =
+          visibleMarkers.find((m) => m.id === param.hoveredObjectId) ||
+          visibleMarkers.find(
+            (m) =>
+              Math.floor(Date.parse(m.chart_time) / 1000) ===
+              Number(param.time),
+          );
+        if (event && onEventSelect) onEventSelect(event.id);
+      });
+    }
     for (const field of Object.keys(colors)) {
       const line = chart.addSeries(LineSeries, {
-        color: colors[field],
-        lineWidth: field === "vwap" ? 1 : 2,
+        color: (review ? reviewColors : colors)[field],
+        lineWidth: review
+          ? field === "vwap"
+            ? 2
+            : 1
+          : field === "vwap"
+            ? 1
+            : 2,
+        lineStyle: review && field === "vwap" ? 2 : 0,
         priceLineVisible: false,
         lastValueVisible: false,
       });
       line.setData(
-        normalized
-          .filter((row) => row[field] != null)
-          .map((row) => ({ time: row.time, value: row[field] })),
+        normalized.map((row) =>
+          row[field] == null
+            ? { time: row.time }
+            : { time: row.time, value: row[field] },
+        ),
       );
     }
     chart.timeScale().fitContent();
 
     const placeGuides = () => {
+      if (review) return;
       const start = Math.floor(Date.parse(sessionStart) / 1000);
       const startX = chart.timeScale().timeToCoordinate(start);
       const edgeX = chart
@@ -150,7 +234,7 @@ export default function Chart({
       tooltip.current.hidden = false;
       tooltip.current.style.left = `${Math.min(param.point.x + 12, node.current.clientWidth - 190)}px`;
       tooltip.current.style.top = `${Math.max(param.point.y - 82, 8)}px`;
-      tooltip.current.innerHTML = `<strong>${when.date} · ${when.time} CT</strong>
+      tooltip.current.innerHTML = `<strong>${when.date} · ${when.time} ${timezone === "America/New_York" ? "ET" : "CT"}</strong>
         <span>O ${display(row.open)} · H ${display(row.high)}</span>
         <span>L ${display(row.low)} · C ${display(row.close)}</span>
         <span>Volume ${display(row.volume)}</span>
@@ -171,44 +255,74 @@ export default function Chart({
       chart.timeScale().unsubscribeVisibleTimeRangeChange(placeGuides);
       chart.remove();
     };
-  }, [candles, markers, replayTime, sessionStart, timezone]);
+  }, [
+    candles,
+    markers,
+    levels,
+    review,
+    onEventSelect,
+    replayTime,
+    sessionStart,
+    timezone,
+    title,
+  ]);
 
   return (
     <section className="chart-card">
       <header>
         <h2>{title}</h2>
-        <span>America/Chicago · CT</span>
+        <span>
+          {timezone} · {timezone === "America/New_York" ? "ET" : "CT"}
+        </span>
       </header>
       {candles.length ? (
         <div className="chart-wrap">
           <div ref={node} aria-label={`${title} candlestick chart`} />
-          <div
-            ref={sessionLine}
-            className="session-divider"
-            data-testid={`${title}-session-divider`}
-          >
-            <span>{replayDate} · REPLAY</span>
-          </div>
-          <div
-            ref={replayEdge}
-            className="replay-edge"
-            data-testid={`${title}-replay-edge`}
-          >
-            <span>
-              NOW ·{" "}
-              {chartTime(Math.floor(Date.parse(replayTime) / 1000), timezone)}{" "}
-              CT
-            </span>
-          </div>
+          {!review && (
+            <>
+              <div
+                ref={sessionLine}
+                className="session-divider"
+                data-testid={`${title}-session-divider`}
+              >
+                <span>{replayDate} · REPLAY</span>
+              </div>
+              <div
+                ref={replayEdge}
+                className="replay-edge"
+                data-testid={`${title}-replay-edge`}
+              >
+                <span>
+                  NOW ·{" "}
+                  {chartTime(
+                    Math.floor(Date.parse(replayTime) / 1000),
+                    timezone,
+                  )}{" "}
+                  CT
+                </span>
+              </div>
+            </>
+          )}
           <div ref={tooltip} className="chart-tooltip" role="tooltip" hidden />
         </div>
       ) : (
-        <p>No visible completed candles yet.</p>
+        <p>
+          {review
+            ? "No stored candles available for this timeframe."
+            : "No visible completed candles yet."}
+        </p>
       )}
       <footer>
-        <span>Previous session</span>
-        <span className="session-key">│ Current replay session</span>
-        {Object.entries(colors).map(([key, color]) => (
+        {!review && (
+          <>
+            <span>Previous session</span>
+            <span className="session-key">│ Current replay session</span>
+          </>
+        )}
+        {review && (
+          <span>Drag to pan · Scroll to zoom · Click an event candle</span>
+        )}
+        {Object.entries(review ? reviewColors : colors).map(([key, color]) => (
           <span key={key} style={{ color }}>
             {key.replace("_", " ").toUpperCase()}
           </span>

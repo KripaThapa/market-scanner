@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { request } from "./api";
 import Chart from "./Chart";
+import ChartReview from "./ChartReview";
 import CalendarPicker from "./CalendarPicker";
 import StockSelector from "./StockSelector";
 import BaselineReport from "./BaselineReport";
@@ -18,7 +19,7 @@ const localTime = (value, zone) =>
     : "—";
 
 export default function App() {
-  const [view, setView] = useState("REPLAY");
+  const [view, setView] = useState("REVIEW");
   const [instrument, setInstrument] = useState(""),
     [assetType, setAssetType] = useState("EQUITY");
   const [date, setDate] = useState(""),
@@ -115,11 +116,13 @@ export default function App() {
     }
   }, [assetType]);
   useEffect(() => {
+    if (view !== "REPLAY") return;
     request("/api/internal/strategy-lab/capabilities")
       .then(setCapabilities)
       .catch(() => setCapabilities(null));
-  }, []);
+  }, [view]);
   useEffect(() => {
+    if (view !== "REPLAY") return;
     if (assetType !== "EQUITY" || !date) return;
     let active = true;
     setUniverse(null);
@@ -133,7 +136,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [assetType, date]);
+  }, [assetType, date, view]);
   const randomCase = () => {
     if (!universe?.symbols.length) return;
     const values = new Uint32Array(1);
@@ -149,14 +152,20 @@ export default function App() {
       <header className="hero">
         <div>
           <span>STRATEGY LAB V1</span>
-          <h1>Historical visual replay</h1>
+          <h1>Daily watchlist review</h1>
           <p>
-            Blind candle-by-candle research. Human observations are not trading
-            signals.
+            Review the chart, scanner events, and what happened afterward.
+            Historical research only; no trade recommendations.
           </p>
         </div>
       </header>
       <nav className="lab-tabs" aria-label="Private Strategy Lab views">
+        <button
+          className={view === "REVIEW" ? "selected" : ""}
+          onClick={() => setView("REVIEW")}
+        >
+          Chart review
+        </button>
         <button
           className={view === "REPLAY" ? "selected" : ""}
           onClick={() => setView("REPLAY")}
@@ -182,6 +191,7 @@ export default function App() {
           Rules
         </button>
       </nav>
+      {view === "REVIEW" && <ChartReview />}
       {view === "BASELINE" && <BaselineReport />}
       {view === "WATCHLIST" && <DailyWatchlist />}
       {view === "RULES" && <Rules />}
