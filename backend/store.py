@@ -52,6 +52,30 @@ class Store:
         with self.engine.connect() as connection:
             connection.execute(text('SELECT 1'))
 
+    def lookout_alerts(self, trading_day, category='ALL', *, limit=200, before_id=None):
+        """Read-only, date-bound lookout history. Legacy evidence is not rewritten."""
+        from datetime import date
+        from .level_alerts import LOOKOUT_TYPES
+        from .alerts import lookout_row
+        date.fromisoformat(trading_day)
+        if category not in {'ALL', 'LONG', 'SHORT', 'LEVEL'}:
+            raise ValueError('Invalid lookout category')
+        types = LOOKOUT_TYPES
+        if category in {'LONG', 'SHORT'}:
+            types = {f'WATCHLIST_LEVEL_{category}'}
+        elif category == 'LEVEL':
+            types = LOOKOUT_TYPES - {'WATCHLIST_LEVEL_LONG', 'WATCHLIST_LEVEL_SHORT'}
+        limit = min(max(limit, 1), 200)
+        with self.session() as session:
+            query = select(Alert).where(Alert.level_key.is_not(None), Alert.alert_type.in_(types),
+                or_(Alert.trading_date == trading_day,
+                    (Alert.trading_date.is_(None)) & (Alert.snapshot['trading_date'].as_string() == trading_day)))
+            if before_id is not None:
+                query = query.where(Alert.id < before_id)
+            rows = list(session.scalars(query.order_by(Alert.id.desc()).limit(limit + 1)))
+            return {'items': [lookout_row(row) for row in rows[:limit]],
+                    'next_before_id': rows[limit - 1].id if len(rows) > limit else None}
+
     @contextmanager
     def claim_lock(self, name):
         key = {'scanner': 839201, 'upload': 839202}[name]
@@ -145,19 +169,24 @@ class Store:
 
     @staticmethod
     def _symbols(session, upload_id, symbols, rejected, timestamp, rows=()):
-        from ripster_scanner.watchlist_levels import parse_levels
+        from ripster_scanner.watchlist_levels import lookout_instructions
         session.execute(delete(WatchlistSymbol).where(WatchlistSymbol.watchlist_upload_id == upload_id))
-        notes, instructions = {}, {}
+        notes, instructions, structured = {}, {}, {}
         for row in rows:
             notes.setdefault(row.symbol, row.original_note)
-            for level in parse_levels(row.original_note):
-                instructions.setdefault(row.symbol, []).append({
-                    'direction': level.direction, 'trigger_level': str(level.price),
-                    'original_note': row.original_note, 'source_bbox': row.as_dict()['source_bbox']})
+            fields = row.structured_fields or {}
+            structured.setdefault(row.symbol, []).append({**fields,
+                'original_note': row.original_note, 'confidence': row.confidence,
+                'source_bbox': row.as_dict()['source_bbox']})
+            for level in lookout_instructions(fields, row.original_note):
+                instructions.setdefault(row.symbol, []).append({**level,
+                    'original_note': row.original_note, 'watchlist_details': fields,
+                    'source_bbox': row.as_dict()['source_bbox']})
         for symbol in symbols:
             session.add(WatchlistSymbol(watchlist_upload_id=upload_id, symbol=symbol,
                                        validation_status='validated', original_note=notes.get(symbol),
                                        level_instructions=instructions.get(symbol, []),
+                                       structured_rows=structured.get(symbol),
                                        created_at=timestamp))
         for item in rejected:
             session.add(WatchlistSymbol(watchlist_upload_id=upload_id, symbol=item['candidate'],
@@ -227,7 +256,8 @@ class Store:
                 'candidate_count': upload.candidate_count, 'validated_count': upload.validated_count,
                 'candidates': upload.candidates,
                 'symbols': [s.symbol for s in symbols if s.validation_status == 'validated'],
-                'symbol_rows': [{'symbol': s.symbol, 'original_note': s.original_note}
+                'symbol_rows': [{'symbol': s.symbol, 'original_note': s.original_note,
+                                 'structured_rows': s.structured_rows}
                                 for s in symbols if s.validation_status == 'validated'],
                 'rejected': [{'candidate': s.symbol, 'reason': s.rejection_reason}
                              for s in symbols if s.validation_status == 'rejected'], 'error': upload.error}

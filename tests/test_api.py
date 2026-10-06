@@ -258,7 +258,9 @@ class APITests(unittest.TestCase):
                 setup_state='external state', reason='fixture only', distance_status='unknown', detected_at=now(), active=True))
             session.add(Alert(symbol='NVDA', alert_type='fixture', reason='stored only', created_at=now()))
         self.assertNotIn('reason', self.client.get('/api/setups/forming').json()['items'][0])
-        self.assertEqual(self.client.get('/api/alerts').json()['items'][0]['alert_type'], 'fixture')
+        self.assertEqual(self.client.get('/api/alerts').json()['items'], [])
+        with self.store.session() as session:
+            self.assertEqual(session.scalar(select(Alert.alert_type)), 'fixture')
         self.assertEqual(self.client.get('/api/dashboard').json()['counts']['developing'], 1)
 
     def test_upload_persists_and_queues_only_valid_symbols(self):

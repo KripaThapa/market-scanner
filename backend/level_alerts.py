@@ -11,6 +11,8 @@ from ripster_scanner.watchlist_levels import parse_levels, price_value
 
 log = logging.getLogger(__name__)
 TRADING_TIMEZONE = ZoneInfo('America/New_York')
+SEMANTICS = {'LONG', 'SHORT', 'SUPPORT', 'RESISTANCE', 'NO_GO'}
+LOOKOUT_TYPES = {f'WATCHLIST_LEVEL_{semantic}' for semantic in SEMANTICS}
 
 
 def trading_date(at):
@@ -37,9 +39,11 @@ def activate_levels(session, upload, *, date, at):
         for item in instructions:
             price = price_value(item.get('trigger_level'))
             direction = item.get('direction')
-            if price is None or direction not in {'LONG', 'SHORT'}:
+            semantic = item.get('semantic') or direction
+            if price is None or semantic not in SEMANTICS:
                 continue
-            key = level_key(date, source.symbol, direction, price)
+            direction = semantic if semantic in {'LONG', 'SHORT'} else 'LEVEL'
+            key = level_key(date, source.symbol, semantic, price)
             if key in wanted:
                 continue  # Same literal level on multiple rows: first source row wins.
             wanted.add(key)
@@ -54,6 +58,8 @@ def activate_levels(session, upload, *, date, at):
                 monitor.previous_bar_at = None
                 monitor.previous_observed_at = None
             monitor.active = True
+            monitor.semantic = semantic
+            monitor.watchlist_details = item.get('watchlist_details')
             monitor.activated_at = at
             monitor.original_note = item.get('original_note')
             monitor.source_watchlist_id = upload.id
@@ -67,8 +73,8 @@ def activate_levels(session, upload, *, date, at):
 def collect_level_alerts(session, snapshot_id, observations, timestamp):
     """Publication lock + per-level savepoint makes event/cursor updates atomic.
 
-    First observation seeds a baseline, even if already beyond the level. Failed
-    or missing observations cannot advance it. Equality is never a crossing.
+    Directional/No-Go first observations seed a baseline. Generic pivots can
+    alert on exact first touch. Missing observations cannot advance a cursor.
     """
     timestamp = utc(timestamp)
     session.flush()
@@ -95,20 +101,32 @@ def collect_level_alerts(session, snapshot_id, observations, timestamp):
                         or bar < _stored_utc(monitor.previous_bar_at)):
                     continue
                 previous = monitor.previous_price
-                crossed = previous is not None and (
-                    previous <= monitor.trigger_level < price if monitor.direction == 'LONG'
-                    else previous >= monitor.trigger_level > price)
+                semantic = monitor.semantic or monitor.direction
+                level = monitor.trigger_level
+                if semantic in {'SUPPORT', 'RESISTANCE'}:
+                    # First exact touch, or either-direction observed crossing.
+                    # A first price merely beyond a level is not a known crossing.
+                    crossed = price == level or (previous is not None and (
+                        previous < level < price or previous > level > price))
+                elif semantic == 'LONG':
+                    crossed = previous is not None and previous <= level < price
+                else:  # SHORT or explicit No-Go warning; no short inference.
+                    crossed = previous is not None and previous >= level > price
                 if crossed:
                     source = observation.source
                     evidence = {
-                        'schema_version': 1, 'trading_date': monitor.watchlist_date,
+                        'schema_version': 2, 'trading_date': monitor.watchlist_date,
                         'watchlist_date': monitor.watchlist_date,
                         'symbol': monitor.symbol, 'direction': monitor.direction,
+                        'semantic': semantic,
+                        'watchlist_details': monitor.watchlist_details,
                         'trigger_level': str(monitor.trigger_level), 'price': float(price),
                         'observed_price': str(price), 'crossing_timestamp': at.isoformat(),
-                        'bar_at': bar.isoformat(), 'previous_price': str(previous),
-                        'previous_observed_at': _stored_utc(monitor.previous_observed_at).isoformat(),
-                        'previous_bar_at': _stored_utc(monitor.previous_bar_at).isoformat(),
+                        'bar_at': bar.isoformat(), 'previous_price': str(previous) if previous is not None else None,
+                        'previous_observed_at': _stored_utc(monitor.previous_observed_at).isoformat()
+                            if monitor.previous_observed_at else None,
+                        'previous_bar_at': _stored_utc(monitor.previous_bar_at).isoformat()
+                            if monitor.previous_bar_at else None,
                         'original_note': monitor.original_note,
                         'source_watchlist_id': monitor.source_watchlist_id,
                         'source_row_id': monitor.source_row_id, 'source_bbox': monitor.source_bbox,
@@ -118,7 +136,8 @@ def collect_level_alerts(session, snapshot_id, observations, timestamp):
                         'day_timezone': str(TRADING_TIMEZONE),
                     }
                     session.add(Alert(symbol=monitor.symbol,
-                        alert_type=f'WATCHLIST_LEVEL_{monitor.direction}', level_key=key,
+                        alert_type=f'WATCHLIST_LEVEL_{semantic}', level_key=key,
+                        trading_date=monitor.watchlist_date,
                         reason=monitor.original_note, snapshot=evidence, created_at=timestamp))
                 monitor.previous_price = price
                 monitor.previous_observed_at = at

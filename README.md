@@ -39,20 +39,13 @@ The public UI has Dashboard, Discovery, Forming Setups, Sectors, Alerts, Setting
 
 The four experimental forming thresholds and their formulas are documented in [strategy](docs/strategy.md). [Sector Enrichment V1](docs/sector-enrichment.md) uses FMP reference profiles via a provider-neutral persistent cache (7-day TTL; 24-hour failure retry). Set `FMP_API_KEY` locally to enable lookups. Optional `config/sectors.json` is fallback only. UNKNOWN symbols still scan; Alpaca/IEX remains the only price/candle provider. Licensing/public-display approval remains separate.
 
-## Web FORMING alerts
+## Watchlist Lookout alerts
 
-Alert Foundation V1 persists experimental FORMING transitions only from completed,
-decision-eligible 3-minute observations. Recent Alerts refreshes with the dashboard;
-stock charts mark the actual persisted decision candle. Alert state survives
-provider failures, restarts and watchlist changes. Snapshots are immutable.
-FORMING is not a trade entry. Backtest and Discord delivery are not implemented.
+**IMPLEMENTED:** [Watchlist Lookout Alerts V1](docs/watchlist-lookout-alerts.md) makes supplied daily watchlist levels the primary live Alerts experience. Structured support/resistance pivots, literal LONG/SHORT crossings and No-Go warnings reuse the existing daily monitor engine. Original Game Plans remain visible where reliably extracted. A lookout calls attention to a stock; it is **not a trade recommendation**.
 
-[Watchlist Level Alerts V1](docs/watchlist-level-alerts.md) automatically monitors
-all explicit LONG-above and SHORT-below levels when a validated daily watchlist is
-activated. The trading date is fixed at successful ingestion in America/New_York;
-levels expire that day and never carry forward. LEVEL TRIGGER events are independent
-of FORMING and retain the original watchlist note. Apply additive migration `0015`
-before using updated services; no application database has been migrated here.
+Uploaded watchlist → structured levels + Game Plan → daily level monitors → immutable lookout alerts → web UI + optional browser sound. Alerts default to today's New York date and All, offer historical date/category filters, refresh every 15 seconds and sound only for new live persisted IDs after initial loading. Levels expire at New York midnight and never carry forward. Apply additive migration `0016` before starting updated services; no application database migration or deployment ran during implementation. See the feature documentation for conservative OCR handling, exact reach/cross rules, read-only October 5 validation limitations and deployment steps.
+
+FORMING continues to persist from completed, decision-eligible 3-minute observations for Lab/research. It is excluded from primary Alerts and Recent Alerts, with existing stock-chart marker compatibility retained. The frozen detector, persistence/restart guarantees and historical evidence remain unchanged. Backtest and external notification delivery are not implemented.
 See [architecture](docs/architecture.md#alert-foundation-v1--implemented) for
 transition semantics, migration `0013`, evidence fields and limitations.
 

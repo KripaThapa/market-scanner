@@ -1,5 +1,7 @@
 # Watchlist Level Alerts V1 — implemented locally
 
+This document records the earlier directional-only engine and its verification history. Its UI and extraction descriptions are superseded by [Watchlist Lookout Alerts V1](watchlist-lookout-alerts.md), which extends the same monitors with structured pivots, No-Go warnings, date filtering and optional browser sound. The historical verification notes below are retained as release history.
+
 No application database migration or deployment has run. Migration verification
 uses isolated test databases only.
 

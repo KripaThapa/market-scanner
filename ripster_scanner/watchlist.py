@@ -32,12 +32,14 @@ class ExtractedWatchlistRow:
     confidence: float
     source_bbox: tuple[int, int, int, int]
     tokens: tuple[OCRToken, ...] = ()
+    structured_fields: dict | None = None
 
     def as_dict(self):
         left, top, right, bottom = self.source_bbox
         return {'symbol': self.symbol, 'original_note': self.original_note,
                 'confidence': self.confidence,
-                'source_bbox': {'left': left, 'top': top, 'right': right, 'bottom': bottom}}
+                'source_bbox': {'left': left, 'top': top, 'right': right, 'bottom': bottom},
+                'structured_fields': self.structured_fields}
 
 
 @dataclass(frozen=True)
@@ -87,7 +89,7 @@ def validate_candidates(tokens: list[OCRToken], active_symbols: set[str]) -> Wat
     return WatchlistImport(tuple(candidates), tuple(validated), tuple(rejected))
 
 
-def extract_watchlist_rows(tokens: list[OCRToken]) -> tuple[ExtractedWatchlistRow, ...]:
+def extract_watchlist_rows(tokens: list[OCRToken], *, image_path=None) -> tuple[ExtractedWatchlistRow, ...]:
     """Select symbols from the repeated left-hand table column.
 
     The supplied watchlist is a table, not a prose document: symbols repeat at
@@ -137,6 +139,12 @@ def extract_watchlist_rows(tokens: list[OCRToken]) -> tuple[ExtractedWatchlistRo
         else:
             groups[-1].append(token)
 
+    from .watchlist_table import column_boundaries, extract_cells, extract_pivot_tokens, row_pivot_cells
+    columns = column_boundaries(geometric, min((token.top for token in anchors
+        if normalize_ticker(token.text) not in OCR_NOISE), default=0), image_path)
+    supplemental = extract_pivot_tokens(image_path, columns,
+        int(min(t.top for t in anchors)-typical_height),
+        int(max(t.bottom for t in anchors)+typical_height)) if image_path and columns else []
     rows = []
     for group in groups:
         top = int(min(token.top for token in group) - typical_height * 1.5)
@@ -149,10 +157,19 @@ def extract_watchlist_rows(tokens: list[OCRToken]) -> tuple[ExtractedWatchlistRo
         note = " ".join(notes).strip()
         left = min(token.left for token in row_tokens)
         right = max(token.right for token in row_tokens)
+        cell_tokens = list(row_tokens)
+        # Prefer the original reading for a matching token; supplements only
+        # recover absent pivot text. Conflicting readings disable that cell.
+        for token in supplemental:
+            if top <= token.center_y <= bottom and not any(
+                    token.text == old.text and abs(token.center_x-old.center_x)<typical_height
+                    and abs(token.center_y-old.center_y)<typical_height for old in row_tokens):
+                cell_tokens.append(token)
+        pivot_cells = row_pivot_cells(image_path, columns, top, bottom) if image_path and columns else None
         for anchor in group:
             rows.append(ExtractedWatchlistRow(
                 normalize_ticker(anchor.text), note, anchor.confidence,
-                (left, top, right, bottom), tuple(row_tokens)))
+                (left, top, right, bottom), tuple(row_tokens), extract_cells(cell_tokens, columns, pivot_cells)))
     return tuple(rows)
 
 

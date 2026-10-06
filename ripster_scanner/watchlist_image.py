@@ -62,7 +62,48 @@ def extract_image_tokens(image_path: str | Path) -> list[OCRToken]:
             f"Cannot OCR image {path}. Check image readability and Tesseract English language data."
         ) from exc
 
-    reader = csv.DictReader(io.StringIO(result.stdout), delimiter="\t", quoting=csv.QUOTE_NONE)
+    tokens = tokens_from_tsv(result.stdout)
+    # Sparse-text OCR can miss dark text on the colored header and vertical MTF.
+    # A bounded header-only pass preserves the established body/symbol OCR.
+    headings = [t for t in tokens if t.text.lower() in {'news', 'support', 'game'}]
+    first = {}
+    for token in headings:
+        first.setdefault(token.text.lower(), token)
+    if len(first) == 3 and max(t.top for t in first.values()) - min(t.top for t in first.values()) < max(t.height for t in first.values()) * 2:
+        try:
+            from PIL import Image, ImageChops, ImageDraw
+            with Image.open(path) as image:
+                height = max(t.height for t in first.values())
+                top = max(0, int(min(t.top for t in first.values()) - height * 0.65))
+                bottom = min(image.height, int(max(t.bottom for t in first.values()) + height * 1.5))
+                buffer = io.BytesIO()
+                cropped = image.crop((0, top, image.width, bottom)).convert('RGB')
+                red, green, blue = cropped.split()
+                # Black header lettering on saturated colored cells: maximum
+                # channel separates ink from the background without touching body OCR.
+                ink = ImageChops.lighter(ImageChops.lighter(red, green), blue).point(
+                    lambda value: 255 if value >= 100 else 0)
+                draw = ImageDraw.Draw(ink)
+                ys = list(range(ink.height))
+                borders = [x for x in range(ink.width) if sum(ink.getpixel((x,y)) == 0
+                    for y in ys) >= len(ys) * .95]
+                for x in borders:
+                    draw.line((x,0,x,ink.height), fill=255)
+                ink.save(buffer, format='PNG')
+            header = subprocess.run(['tesseract','stdin','stdout','-l','eng','--psm','6','tsv'],
+                input=buffer.getvalue(), capture_output=True, check=True, timeout=15)
+            from dataclasses import replace
+            extra = [replace(t, top=t.top + top) for t in tokens_from_tsv(header.stdout.decode())]
+            names = {t.text.lower().strip(':.') for t in extra if t.confidence >= 80}
+            if {'news','support','resistance','game'} <= names:
+                tokens = [t for t in tokens if not top <= t.center_y < bottom] + extra
+        except (ImportError, OSError, ValueError, subprocess.SubprocessError, UnicodeError):
+            pass  # Optional header failure never makes symbol activation fragile.
+    return tokens
+
+
+def tokens_from_tsv(output):
+    reader = csv.DictReader(io.StringIO(output), delimiter="\t", quoting=csv.QUOTE_NONE)
     if not {"level", "text", "conf"} <= set(reader.fieldnames or []):
         raise WatchlistImageError("Tesseract returned invalid TSV output")
     tokens = []

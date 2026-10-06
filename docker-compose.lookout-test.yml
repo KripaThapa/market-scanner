@@ -1,0 +1,37 @@
+# Disposable verification only. Never uses the application's database or volumes.
+services:
+  postgres:
+    image: postgres:16-bookworm
+    environment:
+      POSTGRES_DB: lookout_tests
+      POSTGRES_USER: lookout_tests
+      POSTGRES_PASSWORD: disposable-test-only
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "lookout_tests", "-d", "lookout_tests"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+  test:
+    image: ripster-scanner-python:local
+    command: ["python", "-m", "unittest", "discover", "-s", "tests"]
+    environment:
+      RIPSTER_TEST_POSTGRES: "1"
+      POSTGRES_DB: lookout_tests
+      POSTGRES_USER: lookout_tests
+      POSTGRES_PASSWORD: disposable-test-only
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app/backend:ro
+      - ./ripster_scanner:/app/ripster_scanner:ro
+      - ./scanner:/app/scanner:ro
+      - ./research:/app/research:ro
+      - ./discovery:/app/discovery:ro
+      - ./strategy_lab:/app/strategy_lab:ro
+      - ./migrations:/app/migrations:ro
+      - ./tests:/app/tests:ro
+      - ./config:/app/config:ro
+      - ./alembic.ini:/app/alembic.ini:ro

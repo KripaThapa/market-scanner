@@ -161,3 +161,18 @@ def public_alert(row):
 
 def public_marker(row):
     return {key: row.get(key) for key in ('id', 'timestamp', 'alert_type', 'decision_candle_at')}
+
+
+def lookout_row(alert):
+    """Only explicitly authorized watchlist context; no raw note/provenance dump."""
+    snap = alert.snapshot or {}
+    details = snap.get('watchlist_details') or {}
+    semantic = snap.get('semantic') or snap.get('direction')
+    return {'id': alert.id, 'symbol': alert.symbol, 'alert_type': alert.alert_type,
+            'timestamp': snap.get('crossing_timestamp') or _stored_utc(alert.created_at).isoformat(),
+            'trading_date': alert.trading_date or snap.get('trading_date'),
+            'direction': semantic if semantic in {'LONG', 'SHORT'} else 'LEVEL',
+            'level_type': semantic, 'trigger_level': snap.get('trigger_level'),
+            'price': snap.get('price'), 'game_plan': details.get('game_plan'),
+            'support_pivots': details.get('support_pivots', []),
+            'resistance_pivots': details.get('resistance_pivots', [])}

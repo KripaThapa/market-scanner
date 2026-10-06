@@ -371,11 +371,14 @@ class LevelIntegrationTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200, response.text)
         self.cycle({'AAA': 99}, AT + timedelta(minutes=1))
         self.cycle({'AAA': 101}, AT + timedelta(minutes=2))
-        with TestClient(create_app(store=self.store), base_url='http://localhost') as client:
+        with patch('backend.store.now', return_value=AT), TestClient(create_app(store=self.store), base_url='http://localhost') as client:
             for route in ('/api/dashboard', '/api/alerts'):
                 response = client.get(route)
                 self.assertEqual(response.status_code, 200)
-                self.assertIn('LONG > 100; original instruction', response.text)
+                payload = response.json()
+                items = payload['alerts'] if route == '/api/dashboard' else payload['items']
+                self.assertEqual(items[0]['trigger_level'], '100.00000000')
+                self.assertIsNone(items[0]['game_plan'])  # No invented column split on a legacy row.
                 for private in ('source_watchlist_id', 'source_row_id', 'source_bbox',
-                                'provider', 'feed', 'level_key', 'trading_date', 'previous_price'):
+                                'provider', 'feed', 'level_key', 'previous_price', 'original_note'):
                     self.assertNotIn(f'"{private}"', response.text)

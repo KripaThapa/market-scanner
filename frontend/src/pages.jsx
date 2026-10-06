@@ -107,7 +107,7 @@ export function Dashboard({ data, navigate, openSymbol }) {
       <div className="dashboard-grid">
         <Panel
           title="Recent Alerts"
-          subtitle="Watchlist level triggers and completed-candle FORMING transitions"
+          subtitle="Today's watchlist lookout notifications"
           action={
             <button className="text-button" onClick={() => navigate("Alerts")}>
               View all →
@@ -116,10 +116,12 @@ export function Dashboard({ data, navigate, openSymbol }) {
         >
           <Table
             label="recent alerts"
-            rows={(data?.alerts || []).slice(0, 5)}
+            rows={(data?.alerts || [])
+              .filter((row) => row.alert_type?.startsWith("WATCHLIST_LEVEL_"))
+              .slice(0, 5)}
             columns={alertColumns(openSymbol)}
             emptyTitle="No alerts yet"
-            emptyText="Watchlist level triggers and experimental FORMING transitions will appear here. FORMING is not a trade entry."
+            emptyText="Supplied watchlist levels will appear here when reached or crossed. Lookout alerts are not trade recommendations."
           />
         </Panel>
         <Panel

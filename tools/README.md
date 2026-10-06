@@ -37,3 +37,6 @@ and licensing/caching/public-display rights still need verification. A future
 cache should retain source and retrieval time; changes must not rewrite historical
 alert snapshots. No historical classification or effective-date guarantees were
 established by this current-profile POC.
+# Read-only Lookout audit
+
+`inspect_lookout.py` inspects October 5 CBRS/MSFT watchlist, monitor and immutable alert evidence inside the existing authorized application environment. It starts an explicit PostgreSQL READ ONLY transaction and never migrates, activates or backfills data. It handles older schemas and prints only whitelisted records, never connection settings. The local Compose database inspection found version 0012 and no October 5 uploads; this does not establish production findings. See [validation status](../docs/watchlist-lookout-alerts.md#october-5-read-only-validation-status).

@@ -52,3 +52,42 @@ def parse_levels(note):
             if level not in levels:
                 levels.append(level)
     return tuple(levels)
+
+
+NO_GO = re.compile(r'\bno\s+go\s+(?:under|below)\s+\$?\s*(\d+(?:\.\d+)?)(?![\w/-]|\.[\d.])', re.I)
+
+
+def parse_pivots(cell):
+    """Strict numeric cell, optionally slash-separated; never extract numbers from prose."""
+    if not re.fullmatch(r'\s*\$?\d+(?:\.\d+)?(?:\s*/\s*\$?\d+(?:\.\d+)?)*\s*', cell or ''):
+        return ()
+    values = [price_value(part.strip().lstrip('$')) for part in cell.split('/')]
+    if any(value is None for value in values):
+        return ()
+    return tuple(dict.fromkeys(values))
+
+
+def lookout_instructions(fields, fallback_note=None):
+    """Only validated cells and literal directional/warning clauses create monitors."""
+    result = []
+    for semantic, key in (('SUPPORT', 'support_pivots'), ('RESISTANCE', 'resistance_pivots')):
+        for value in fields.get(key, []) or []:
+            price = price_value(value)
+            if price is not None:
+                result.append({'direction': 'LEVEL', 'semantic': semantic, 'trigger_level': str(price)})
+    # Without reliable column geometry retain the existing literal-only parser.
+    plan = fields.get('game_plan') if fields.get('columns_detected') else fallback_note
+    if fields.get('game_plan_reliable') is False or fields.get('literal_reliable') is False:
+        plan = None
+    if plan:
+        for level in parse_levels(plan):
+            result.append({'direction': level.direction, 'semantic': level.direction,
+                           'trigger_level': str(level.price)})
+        for match in NO_GO.finditer(plan):
+            tail = plan[match.end():]
+            if re.match(r'\s*(?:[/–%\-]|to\b|percent\b|,\s*\d)', tail, re.I):
+                continue
+            price = price_value(match[1])
+            if price is not None:
+                result.append({'direction': 'LEVEL', 'semantic': 'NO_GO', 'trigger_level': str(price)})
+    return list({(item['semantic'], item['trigger_level']): item for item in result}.values())

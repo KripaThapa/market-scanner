@@ -50,7 +50,7 @@ class ImportService:
             ocr_started = time.perf_counter()
             log.info('watchlist_import stage=ocr_started snapshot_id=%s', snapshot_id)
             tokens = extract_image_tokens(path)
-            rows = extract_watchlist_rows(tokens)
+            rows = extract_watchlist_rows(tokens, image_path=path)
             log.info('watchlist_import stage=ocr_completed snapshot_id=%s elapsed_ms=%.1f token_count=%s row_count=%s',
                      snapshot_id, (time.perf_counter() - ocr_started) * 1000, len(tokens), len(rows))
 

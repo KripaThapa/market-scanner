@@ -169,8 +169,10 @@ export default function DailyWatchlist() {
           <h3 id="extracted-title">Extracted Watchlist</h3>
           <p>Review the validated symbols before activation.</p>
           <p>
-            All explicit LONG-above and SHORT-below price levels are monitored
-            automatically for this watchlist&apos;s New York trading date.
+            Validated support/resistance pivots, explicit LONG/SHORT crossings,
+            and No-Go warnings are monitored for this watchlist&apos;s New York
+            trading date. These are lookout notifications, not trade
+            recommendations.
           </p>
           {pending.validated_symbols?.length ? (
             <div className="table-scroll">
@@ -178,6 +180,7 @@ export default function DailyWatchlist() {
                 <thead>
                   <tr>
                     <th>Symbol</th>
+                    <th>Extracted fields</th>
                     <th>Original Note</th>
                   </tr>
                 </thead>
@@ -185,9 +188,44 @@ export default function DailyWatchlist() {
                   {(pending.validated_rows?.length
                     ? pending.validated_rows
                     : pending.validated_symbols.map((symbol) => ({ symbol }))
-                  ).map((row) => (
-                    <tr key={row.symbol}>
+                  ).map((row, index) => (
+                    <tr key={`${row.symbol}-${index}`}>
                       <td>{row.symbol}</td>
+                      <td>
+                        {(row.structured_rows || [row.structured_fields])
+                          .filter(Boolean)
+                          .map((fields, i) => (
+                            <div key={i}>
+                              <p>News: {fields.news || "Unavailable"}</p>
+                              <p>
+                                Support:{" "}
+                                {(fields.support_pivots || []).join(" / ") ||
+                                  "Unavailable"}
+                              </p>
+                              <p>
+                                Resistance:{" "}
+                                {(fields.resistance_pivots || []).join(" / ") ||
+                                  "Unavailable"}
+                              </p>
+                              <p>
+                                MTF:{" "}
+                                {fields.mtf == null
+                                  ? "Unknown"
+                                  : fields.mtf
+                                    ? "Yes"
+                                    : "No"}
+                              </p>
+                              <p>
+                                Game Plan: {fields.game_plan || "Unavailable"}
+                              </p>
+                              {(fields.review_warnings || []).map((warning) => (
+                                <p role="status" key={warning}>
+                                  {warning}
+                                </p>
+                              ))}
+                            </div>
+                          ))}
+                      </td>
                       <td>
                         {row.original_note ||
                           "Not captured by the current screenshot extractor"}

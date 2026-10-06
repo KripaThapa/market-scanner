@@ -1104,3 +1104,79 @@ footer {
     font-size: 27px;
   }
 }
+/* Watchlist lookout history */
+.lookout-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.lookout-controls label {
+  display: grid;
+  gap: 6px;
+}
+.lookout-controls input {
+  color: inherit;
+  background: var(--panel, #171e29);
+  border: 1px solid #344150;
+  border-radius: 6px;
+  padding: 9px;
+  color-scheme: dark;
+}
+.lookout-controls button,
+.lookout-filters button,
+.lookout-alerts > button {
+  padding: 9px 16px;
+  border: 1px solid #344150;
+  border-radius: 6px;
+  background: #182333;
+  color: inherit;
+  cursor: pointer;
+}
+.lookout-controls button[aria-pressed="true"],
+.lookout-filters button[aria-pressed="true"] {
+  background: #205347;
+  border-color: #4b9d84;
+}
+.lookout-filters {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.sound-indicator {
+  color: #91ccaa;
+}
+.lookout-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+  gap: 18px;
+}
+.lookout-alert {
+  padding: 22px;
+  border: 1px solid #2b3647;
+  background: #131c29;
+  border-radius: 10px;
+}
+.lookout-alert time,
+.lookout-alert > small {
+  color: #9aa9bb;
+}
+.lookout-alert h2 {
+  font-size: 19px;
+  margin: 13px 0;
+}
+.lookout-alert h2 a {
+  color: #bce0ed;
+  text-decoration: none;
+}
+.lookout-plan {
+  border-top: 1px solid #2b3647;
+  margin-top: 18px;
+  padding-top: 16px;
+}
+.lookout-plan p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}

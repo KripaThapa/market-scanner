@@ -221,7 +221,11 @@ export const alertColumns = (openSymbol) => [
     label: "State",
     render: (state) =>
       state?.startsWith("WATCHLIST_LEVEL_")
-        ? `LEVEL TRIGGER · ${state.endsWith("LONG") ? "LONG" : "SHORT"}`
+        ? state.endsWith("LONG")
+          ? "LONG LOOKOUT"
+          : state.endsWith("SHORT")
+            ? "SHORT LOOKOUT"
+            : "LOOKOUT"
         : state?.replaceAll("_", " "),
   },
   {
@@ -230,7 +234,7 @@ export const alertColumns = (openSymbol) => [
     render: (value, row) =>
       value == null
         ? "—"
-        : `${row.direction === "LONG" ? "Above" : "Below"} $${Number(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 8 })}`,
+        : `${row.direction === "LONG" ? "Above" : row.direction === "SHORT" ? "Below" : "Level"} $${Number(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 8 })}`,
   },
   {
     key: "price",
@@ -245,6 +249,5 @@ export const alertColumns = (openSymbol) => [
             })
           : Number(price).toFixed(2),
   },
-  { key: "context_10m", label: "10m context" },
-  { key: "reason", label: "Reason" },
+  { key: "game_plan", label: "Game Plan" },
 ];

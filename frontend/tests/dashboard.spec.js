@@ -50,6 +50,9 @@ async function mockAPI(page, body = fixture()) {
   await page.route("**/api/dashboard", (route) =>
     route.fulfill({ json: body }),
   );
+  await page.route("**/api/alerts?**", (route) =>
+    route.fulfill({ json: { items: [], next_before_id: null } }),
+  );
   return body;
 }
 
@@ -322,7 +325,7 @@ test("dashboard names scanner results and does not count Unknown as a known sect
   await expect(metric).toContainText("2 stocks missing sector data");
 });
 
-test("level triggers show original instructions separately from FORMING", async ({
+test("lookout notifications show the Game Plan and exclude FORMING from recent alerts", async ({
   page,
 }) => {
   const body = fixture();
@@ -335,7 +338,7 @@ test("level triggers show original instructions separately from FORMING", async 
       direction: "LONG",
       trigger_level: "105.00000000",
       price: 105.1401,
-      reason: "LONG > 105; Original instruction <unchanged>",
+      game_plan: "LONG > 105; Original instruction <unchanged>",
     },
     {
       id: 702,
@@ -348,15 +351,13 @@ test("level triggers show original instructions separately from FORMING", async 
   ];
   await mockAPI(page, body);
   await page.goto("/");
-  await expect(
-    page.getByText("LEVEL TRIGGER · LONG", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("LONG LOOKOUT", { exact: true })).toBeVisible();
   await expect(page.getByText("Above $105.00", { exact: true })).toBeVisible();
   await expect(page.getByText("105.1401", { exact: true })).toBeVisible();
   await expect(
-    page.getByText(body.alerts[0].reason, { exact: true }),
+    page.getByText(body.alerts[0].game_plan, { exact: true }),
   ).toBeVisible();
-  await expect(page.getByText("FORMING SHORT", { exact: true })).toBeVisible();
+  await expect(page.getByText("FORMING SHORT", { exact: true })).toHaveCount(0);
 });
 
 test("recent alerts refresh, open stock detail, and render persisted FORMING markers", async ({
@@ -385,7 +386,15 @@ test("recent alerts refresh, open stock detail, and render persisted FORMING mar
     context_10m: "BULLISH",
     reason: "Experimental forming state detected.",
   });
-  body.alerts = [alert(1, "FORMING_LONG", "2026-09-18T13:42:00Z")];
+  const forming = [alert(1, "FORMING_LONG", "2026-09-18T13:42:00Z")];
+  body.alerts = [
+    {
+      ...alert(10, "WATCHLIST_LEVEL_LONG", null),
+      direction: "LONG",
+      trigger_level: "125",
+      game_plan: "Long above 125",
+    },
+  ];
   await mockAPI(page, body);
   await page.route("**/api/symbols/NVDA", (route) =>
     route.fulfill({
@@ -406,7 +415,7 @@ test("recent alerts refresh, open stock detail, and render persisted FORMING mar
           low: 124,
           volume: 1000,
         })),
-        alerts: body.alerts,
+        alerts: forming,
       },
     }),
   );
@@ -415,15 +424,21 @@ test("recent alerts refresh, open stock detail, and render persisted FORMING mar
     .locator("section")
     .filter({ has: page.getByRole("heading", { name: "Recent Alerts" }) });
   await expect(
-    recent.getByRole("cell", { name: "FORMING LONG", exact: true }),
+    recent.getByRole("cell", { name: "LONG LOOKOUT", exact: true }),
   ).toBeVisible();
   await expect(
     recent.getByRole("cell", { name: "125.50", exact: true }),
   ).toBeVisible();
-  body.alerts.unshift(alert(2, "FORMING_SHORT", "2026-09-18T13:45:00Z"));
+  forming.unshift(alert(2, "FORMING_SHORT", "2026-09-18T13:45:00Z"));
+  body.alerts.unshift({
+    ...alert(11, "WATCHLIST_LEVEL_SHORT", null),
+    direction: "SHORT",
+    trigger_level: "125",
+    game_plan: "Short below 125",
+  });
   await page.clock.fastForward(15000);
   await expect(
-    recent.getByRole("cell", { name: "FORMING SHORT", exact: true }),
+    recent.getByRole("cell", { name: "SHORT LOOKOUT", exact: true }),
   ).toBeVisible();
   await recent.getByRole("link", { name: "NVDA →" }).first().click();
   await expect(page).toHaveURL(/\/symbols\/NVDA$/);

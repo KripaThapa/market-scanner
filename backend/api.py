@@ -4,7 +4,8 @@ from contextlib import asynccontextmanager
 import os
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Path
+from fastapi import FastAPI, HTTPException, Path, Query
+from datetime import date
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import SQLAlchemyError
@@ -91,7 +92,7 @@ def create_app(data_dir=None, *, store=None):
         return {'state': state,
                 'universe': [_public_universe(row) for row in data['universe']],
                 'setups': [_public_setup(row) for row in data['setups']],
-                'alerts': [public_alert(row) for row in data['alerts']],
+                'alerts': store.lookout_alerts(store.today_date())['items'],
                 'sectors': [_public_sector(row) for row in data['sectors']],
                 'counts': {
             'total': sum(r['context_10m'] != 'PENDING' for r in rows),
@@ -119,9 +120,14 @@ def create_app(data_dir=None, *, store=None):
                 'message': 'Developing scanner state; no entry signals.'}
 
     @app.get('/api/alerts')
-    def alerts():
-        return {'items': [public_alert(row) for row in store.read()['alerts']], 'implemented': True,
-                'message': 'Latest 200 stored events. Completed-candle FORMING alerts are experimental, not trade entries.'}
+    def alerts(trading_date: date | None = None,
+               category: Literal['ALL', 'LONG', 'SHORT', 'LEVEL'] = 'ALL',
+               limit: int = Query(default=200, ge=1, le=200),
+               before_id: int | None = Query(default=None, ge=1)):
+        day = trading_date.isoformat() if trading_date else store.today_date()
+        return {**store.lookout_alerts(day, category, limit=limit, before_id=before_id),
+                'trading_date': day, 'category': category, 'implemented': True,
+                'message': 'Watchlist Lookout alerts are attention notifications, not trade recommendations.'}
 
     @app.get('/api/sectors')
     def sectors():

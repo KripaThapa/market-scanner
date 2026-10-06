@@ -194,8 +194,8 @@ class AlertTests(unittest.TestCase):
         self.assertTrue(dashboard['capabilities']['alerts'])
         self.assertTrue(alerts['implemented'])
         self.assertEqual(dashboard['alerts'], alerts['items'])
-        self.assertEqual(set(alerts['items'][0]),
-            {'id', 'symbol', 'timestamp', 'alert_type', 'price', 'context_10m', 'reason'})
+        self.assertEqual(alerts['items'], [])  # FORMING remains persisted, outside primary lookout history.
+        self.assertEqual(len(self.alerts()), 1)
         self.assertEqual(dashboard['counts']['sectors_represented'], 0)
         self.assertEqual(dashboard['counts']['missing_sector_data'], 1)
         for path in ('/api/dashboard', '/api/alerts', '/api/symbols/AAA', '/api/symbols/AAA/chart?timeframe=3m'):

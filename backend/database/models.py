@@ -39,6 +39,7 @@ class WatchlistSymbol(Base):
     rejection_reason: Mapped[str | None] = mapped_column(Text)
     original_note: Mapped[str | None] = mapped_column(Text)
     level_instructions: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    structured_rows: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
@@ -92,6 +93,7 @@ class Alert(Base):
                       Index('ix_alert_symbol_candle', 'symbol', 'decision_candle_at'),
                       Index('uq_alert_level_key', 'level_key', unique=True))
     level_key: Mapped[str | None] = mapped_column(String(100))
+    trading_date: Mapped[str | None] = mapped_column(String(10), index=True)
     transition_number: Mapped[int | None] = mapped_column(Integer)
     strategy_version: Mapped[str | None] = mapped_column(ForeignKey('strategy_versions.id', name='fk_alert_strategy_version'))
     decision_candle_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -112,6 +114,8 @@ class WatchlistLevelMonitor(Base):
     watchlist_date: Mapped[str] = mapped_column(String(10), index=True)
     symbol: Mapped[str] = mapped_column(String(20), index=True)
     direction: Mapped[str] = mapped_column(String(5))
+    semantic: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    watchlist_details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     trigger_level: Mapped[Decimal] = mapped_column(Numeric(24, 8))
     original_note: Mapped[str | None] = mapped_column(Text)
     source_watchlist_id: Mapped[int] = mapped_column(ForeignKey('watchlist_uploads.id'))

@@ -157,9 +157,11 @@ Alert creation time is the publication-time event boundary; decision-candle time
 is its earlier candle opening time, used only for chart placement. Future outcome
 windows must begin after the alert boundary, never at the candle opening.
 
-`/api/dashboard` and `/api/alerts` return at most 200 events with an explicit
-public allowlist: ID, symbol, time, state, price, 10m context and a fixed short
-explanation. The raw detector reason and snapshot are never serialized publicly.
+`/api/dashboard` and `/api/alerts` now return only Watchlist Lookout events for
+the selected New York trading date (today on Dashboard). The extended explicit
+allowlist includes supplied levels, their semantics, observed price and original
+structured Game Plan/pivots; raw detector reasons and snapshots remain private.
+The existing FORMING persistence and research paths remain unchanged.
 The existing public stock detail/chart API adds only persisted marker IDs, states,
 alert timestamps and decision-candle timestamps for exact visible 3m candles
 (up to 1,000 events). No private chart endpoint was needed. Markers are independent
@@ -212,3 +214,5 @@ trading_date → whole-watchlist activation → durable level monitors → exist
 Alpaca/IEX one-minute close observations → immutable level events → web alerts.
 No FORMING, EMA, VWAP, volume or sector gate participates. See
 [level identity, expiry, price source and limitations](watchlist-level-alerts.md).
+
+**Watchlist Lookout Alerts V1 (`0016`)** extends that same engine: table-aware optional extraction → structured pivots/Game Plan → whole-watchlist activation → existing monitors → immutable attention events → date/category API → live polling and optional browser audio. SUPPORT/RESISTANCE first-touch/cross and explicit NO_GO warnings are separate semantics from LONG/SHORT. Daily key identity and savepoint/refresh/restart protections remain. Migration 0016 is additive only and never backfills existing uploads/alerts. FORMING remains persisted for Lab/research and is excluded from primary Alerts. See [Lookout rules, privacy, migration and deployment](watchlist-lookout-alerts.md).

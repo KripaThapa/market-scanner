@@ -4,6 +4,7 @@ import { useDashboard } from "./api";
 import { Dashboard, Sectors } from "./pages";
 import SymbolDetail from "./SymbolDetail";
 import Discovery from "./Discovery";
+import Alerts from "./Alerts";
 
 const pages = [
   "Dashboard",
@@ -18,7 +19,7 @@ const descriptions = {
   Discovery: "The current scanning universe and market context.",
   "Forming Setups": "Developing states reported by the scanner.",
   Alerts:
-    "Watchlist level triggers and experimental FORMING events. No trade entries.",
+    "Lookout notifications from supplied watchlist levels and Game Plans.",
   Sectors: "Objective counts across stocks scanned.",
   Settings: "A preview of future scanner configuration.",
 };
@@ -206,20 +207,7 @@ export default function App() {
               </Panel>
             </>
           )}
-          {!symbol && page === "Alerts" && (
-            <Panel
-              title="Alert history"
-              subtitle="Latest 200 stored events · web alerts"
-            >
-              <Table
-                label="alerts"
-                rows={data?.alerts || []}
-                columns={alertColumns(openSymbol)}
-                emptyTitle="Your alert history is empty"
-                emptyText="New experimental FORMING episodes will appear here."
-              />
-            </Panel>
-          )}
+          {!symbol && page === "Alerts" && <Alerts openSymbol={openSymbol} />}
           {!symbol && page === "Sectors" && (
             <Sectors
               sectors={data?.sectors || []}
