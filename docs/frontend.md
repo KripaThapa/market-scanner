@@ -32,3 +32,6 @@ candle are omitted, not moved to another candle. Re-entry and direct direction
 changes can produce additional markers; persistent same-direction states do not.
 Known sectors excludes UNKNOWN/Unclassified and displays the count of stocks with
 missing metadata. Unknown stocks remain visible and scanned.
+# Structured watchlist review
+
+The existing private Daily Watchlist review displays **Blank** for confidently extracted empty cells, **Unavailable** for failed/uncertain cells, and **Unknown** for uncertain MTF. Field warnings and Original Note remain visible before explicit activation. No chart, live Alerts, polling or sound behavior changes. See [table extraction](watchlist-table-extraction.md).

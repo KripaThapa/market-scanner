@@ -94,8 +94,12 @@ def extract_image_tokens(image_path: str | Path) -> list[OCRToken]:
                 input=buffer.getvalue(), capture_output=True, check=True, timeout=15)
             from dataclasses import replace
             extra = [replace(t, top=t.top + top) for t in tokens_from_tsv(header.stdout.decode())]
-            names = {t.text.lower().strip(':.') for t in extra if t.confidence >= 80}
-            if {'news','support','resistance','game'} <= names:
+            from .watchlist_table import header_band, image_column_boundaries
+            # Header confidence can be corroborated by its adjacent Pivot and
+            # actual borders. Do not relax body/price confidence or discard all
+            # header evidence because one correctly read heading scores <80.
+            if (header_band(extra, bottom + height) and
+                    image_column_boundaries(extra, bottom + height, path)):
                 tokens = [t for t in tokens if not top <= t.center_y < bottom] + extra
         except (ImportError, OSError, ValueError, subprocess.SubprocessError, UnicodeError):
             pass  # Optional header failure never makes symbol activation fragile.

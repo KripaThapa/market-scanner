@@ -196,16 +196,25 @@ export default function DailyWatchlist() {
                           .filter(Boolean)
                           .map((fields, i) => (
                             <div key={i}>
-                              <p>News: {fields.news || "Unavailable"}</p>
+                              <p>
+                                News:{" "}
+                                {fields.news === ""
+                                  ? "Blank"
+                                  : fields.news || "Unavailable"}
+                              </p>
                               <p>
                                 Support:{" "}
                                 {(fields.support_pivots || []).join(" / ") ||
-                                  "Unavailable"}
+                                  (fields.support_cell === ""
+                                    ? "Blank"
+                                    : "Unavailable")}
                               </p>
                               <p>
                                 Resistance:{" "}
                                 {(fields.resistance_pivots || []).join(" / ") ||
-                                  "Unavailable"}
+                                  (fields.resistance_cell === ""
+                                    ? "Blank"
+                                    : "Unavailable")}
                               </p>
                               <p>
                                 MTF:{" "}
@@ -216,7 +225,10 @@ export default function DailyWatchlist() {
                                     : "No"}
                               </p>
                               <p>
-                                Game Plan: {fields.game_plan || "Unavailable"}
+                                Game Plan:{" "}
+                                {fields.game_plan === ""
+                                  ? "Blank"
+                                  : fields.game_plan || "Unavailable"}
                               </p>
                               {(fields.review_warnings || []).map((warning) => (
                                 <p role="status" key={warning}>

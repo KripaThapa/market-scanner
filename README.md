@@ -4,6 +4,8 @@ A deterministic, rule-based market scanner with a React read-only client, FastAP
 
 ## Local development
 
+Structured upload review preserves physical News/pivot/MTF/Game Plan columns. See [watchlist table extraction](docs/watchlist-table-extraction.md) for the October 6 header-confidence fix, Blank versus Unavailable fields, diagnostics and operator verification. It changes no alert/scanner rules and requires no migration beyond 0016.
+
 1. Copy `.env.example` to `.env` and set PostgreSQL and Alpaca credentials. `.env` is ignored by Git. Do not put secrets in Vite variables or React source.
 2. Run `docker compose up --build`.
 3. Open the public scanner at `http://127.0.0.1:${FRONTEND_PORT:-3000}` and the private Strategy Lab at `http://127.0.0.1:${STRATEGY_LAB_PORT:-3003}`. Both bind to loopback for local development.

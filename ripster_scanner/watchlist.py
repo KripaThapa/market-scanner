@@ -130,6 +130,9 @@ def extract_watchlist_rows(tokens: list[OCRToken], *, image_path=None) -> tuple[
     if len(anchors) < 2:
         return ()
 
+    anchors = [token for token in anchors if normalize_ticker(token.text) not in OCR_NOISE]
+    if len(anchors) < 2:
+        return ()
     anchors.sort(key=lambda token: token.center_y)
     row_gap = typical_height * 2.5
     groups: list[list[OCRToken]] = []
@@ -139,17 +142,18 @@ def extract_watchlist_rows(tokens: list[OCRToken], *, image_path=None) -> tuple[
         else:
             groups[-1].append(token)
 
-    from .watchlist_table import column_boundaries, extract_cells, extract_pivot_tokens, row_pivot_cells
+    from .watchlist_table import (column_boundaries, extract_cells, extract_pivot_tokens,
+                                 row_pivot_cells, image_row_bounds, image_blank_cells)
     columns = column_boundaries(geometric, min((token.top for token in anchors
         if normalize_ticker(token.text) not in OCR_NOISE), default=0), image_path)
     supplemental = extract_pivot_tokens(image_path, columns,
         int(min(t.top for t in anchors)-typical_height),
         int(max(t.bottom for t in anchors)+typical_height)) if image_path and columns else []
+    bounds = image_row_bounds(image_path, columns, groups)
+    blanks = image_blank_cells(image_path, columns, bounds)
     rows = []
-    for group in groups:
-        top = int(min(token.top for token in group) - typical_height * 1.5)
-        bottom = int(max(token.bottom for token in group) + typical_height * 1.5)
-        row_tokens = [token for token in geometric if top <= token.center_y <= bottom]
+    for group, (top, bottom), blank_cells in zip(groups, bounds, blanks):
+        row_tokens = [token for token in geometric if top <= token.center_y < bottom]
         row_tokens.sort(key=lambda token: (token.top, token.left))
         anchor_ids = {id(token) for token in group}
         notes = [token.text for token in row_tokens
@@ -158,18 +162,26 @@ def extract_watchlist_rows(tokens: list[OCRToken], *, image_path=None) -> tuple[
         left = min(token.left for token in row_tokens)
         right = max(token.right for token in row_tokens)
         cell_tokens = list(row_tokens)
-        # Prefer the original reading for a matching token; supplements only
-        # recover absent pivot text. Conflicting readings disable that cell.
+        # Supplements recover absent/independently corroborated pivot text.
+        # Conflicting readings disable that cell.
         for token in supplemental:
-            if top <= token.center_y <= bottom and not any(
-                    token.text == old.text and abs(token.center_x-old.center_x)<typical_height
-                    and abs(token.center_y-old.center_y)<typical_height for old in row_tokens):
+            if not top <= token.center_y < bottom:
+                continue
+            matches = [old for old in cell_tokens if token.text == old.text
+                       and abs(token.center_x-old.center_x)<typical_height
+                       and abs(token.center_y-old.center_y)<typical_height]
+            if not matches:
                 cell_tokens.append(token)
+            elif len(matches) == 1 and matches[0].confidence < 80 <= token.confidence <= 100:
+                # Identical, independently read cell text may replace an
+                # uncertain sparse reading. Raw row tokens remain untouched.
+                cell_tokens[cell_tokens.index(matches[0])] = token
         pivot_cells = row_pivot_cells(image_path, columns, top, bottom) if image_path and columns else None
         for anchor in group:
             rows.append(ExtractedWatchlistRow(
                 normalize_ticker(anchor.text), note, anchor.confidence,
-                (left, top, right, bottom), tuple(row_tokens), extract_cells(cell_tokens, columns, pivot_cells)))
+                (left, top, right, bottom), tuple(row_tokens),
+                extract_cells(cell_tokens, columns, pivot_cells, blank_cells)))
     return tuple(rows)
 
 

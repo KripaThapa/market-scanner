@@ -15,6 +15,8 @@ uploaded watchlist → structured levels + original Game Plan
 
 ## Extraction and review
 
+The October 6 structured-column regression is fixed separately in [table extraction](watchlist-table-extraction.md), including measured OCR root cause, corroborated heading/border detection, wrapped rows, Blank versus Unavailable review fields and development diagnostics. This extraction-only change requires no migration beyond deployed 0016 and does not change lookout triggers.
+
 The staged upload → process → review → activate workflow is retained. Validated symbol extraction is mandatory. New imports retain News, Support Pivot, Resistance Pivot, MTF and Game Plan separately when column geometry is reliable, with raw OCR notes/confidence/bounding boxes stored privately for each source row. Historical uploads are never rewritten. A repeated symbol can contribute different source rows; the scanner universe stays deduplicated.
 
 The existing symbol/row OCR is reused. A bounded header pass removes colored backgrounds and printed borders for OCR. The known News/Support/Resistance/Game Plan headings and printed vertical borders locate cells, including the fixture's blank Symbol header and narrow vertical MTF column. Two bounded pivot-column OCR passes recover colored numeric ink missed by sparse OCR. Numeric pivot extraction also requires separate printed cell borders on that row; merged prose rows cannot supply pivot levels simply because OCR finds digits. No ticker or price character corrections are performed. An uncertain vertical MTF heading keeps the original cell text and an Unknown boolean; it cannot influence alerts. Game Plan words are read in visual line order and are not paraphrased.

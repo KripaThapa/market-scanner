@@ -40,3 +40,6 @@ established by this current-profile POC.
 # Read-only Lookout audit
 
 `inspect_lookout.py` inspects October 5 CBRS/MSFT watchlist, monitor and immutable alert evidence inside the existing authorized application environment. It starts an explicit PostgreSQL READ ONLY transaction and never migrates, activates or backfills data. It handles older schemas and prints only whitelisted records, never connection settings. The local Compose database inspection found version 0012 and no October 5 uploads; this does not establish production findings. See [validation status](../docs/watchlist-lookout-alerts.md#october-5-read-only-validation-status).
+# Watchlist OCR geometry diagnostics
+
+`inspect_watchlist_geometry.py IMAGE [--tsv SAVED_TSV]` prints a development-only report for an explicitly supplied image: token coordinates/confidence, header detection, column boundaries and extracted row fields/warnings. It uses no database/provider and is never exposed in normal UI/API responses. Keep private OCR reports under ignored `data/`. See [table extraction](../docs/watchlist-table-extraction.md) for usage and the October 6 regression.

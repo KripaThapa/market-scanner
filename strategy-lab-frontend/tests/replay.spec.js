@@ -239,6 +239,27 @@ test("Daily Watchlist stages extracted symbols for review and activates on confi
           status: "ready_for_review",
           snapshot_id: 41,
           validated_symbols: ["NVDA", "AMD"],
+          validated_rows: [
+            {
+              symbol: "NVDA",
+              original_note: "240.50 Long over 242 original OCR",
+              structured_rows: [
+                {
+                  columns_detected: true,
+                  news: "",
+                  support_pivots: ["240.50000000"],
+                  resistance_pivots: [],
+                  resistance_cell: null,
+                  mtf: null,
+                  game_plan: "Long over 242",
+                  review_warnings: [
+                    "resistance: low-confidence OCR; no conditions extracted.",
+                  ],
+                },
+              ],
+            },
+            { symbol: "AMD" },
+          ],
           candidates: ["NVDA", "AMD"],
           rejection_details: [],
         },
@@ -280,6 +301,21 @@ test("Daily Watchlist stages extracted symbols for review and activates on confi
     page.getByRole("heading", { name: "Extracted Watchlist" }),
   ).toBeVisible();
   await expect(page.getByRole("cell", { name: "NVDA" })).toBeVisible();
+  await expect(page.getByText("News: Blank", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Support: 240.50000000", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Resistance: Unavailable", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("MTF: Unknown", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Game Plan: Long over 242", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("resistance: low-confidence OCR; no conditions extracted."),
+  ).toBeVisible();
+  expect(active).toBeNull();
   await expect(
     page.getByText("Not captured by the current screenshot extractor").first(),
   ).toBeVisible();
