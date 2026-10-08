@@ -208,14 +208,18 @@ test("navigation, sorting, filtering, sector drilldown and honest TBD states", a
   ).toBeVisible();
   for (const [tab, text] of [
     ["Forming Setups", "No forming states reported"],
-    ["Alerts", "Your alert history is empty"],
+    ["Alerts", "No lookout alerts for this date."],
     ["Settings", "Scanner interval"],
   ]) {
     await page
       .getByRole("navigation")
       .getByRole("button", { name: tab, exact: true })
       .click();
-    await expect(page.getByRole("heading", { name: text })).toBeVisible();
+    await expect(
+      tab === "Alerts"
+        ? page.getByText(text, { exact: true })
+        : page.getByRole("heading", { name: text }),
+    ).toBeVisible();
   }
   expect(errors).toEqual([]);
 });

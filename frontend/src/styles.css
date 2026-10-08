@@ -1148,35 +1148,111 @@ footer {
   color: #91ccaa;
 }
 .lookout-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
-  gap: 18px;
-}
-.lookout-alert {
-  padding: 22px;
   border: 1px solid #2b3647;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.lookout-group + .lookout-group {
+  border-top: 1px solid #2b3647;
+}
+.lookout-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 90px 1fr 28px 16px;
+  gap: 12px;
+  align-items: center;
+  text-align: left;
+  padding: 12px 16px;
   background: #131c29;
-  border-radius: 10px;
+  color: inherit;
+  border: 0;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
 }
-.lookout-alert time,
-.lookout-alert > small {
+.lookout-row:hover {
+  background: #1b293a;
+}
+.lookout-row:focus-visible {
+  outline: 2px solid #bce0ed;
+  outline-offset: -2px;
+}
+.lookout-count {
+  border-radius: 50%;
+  min-width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  background: #2b3647;
+  font-size: 12px;
+}
+.lookout-details {
+  padding: 8px 16px 14px;
+}
+.lookout-details h3 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
   color: #9aa9bb;
+  margin: 8px 0;
 }
-.lookout-alert h2 {
-  font-size: 19px;
-  margin: 13px 0;
+.lookout-table-scroll {
+  overflow-x: auto;
 }
-.lookout-alert h2 a {
-  color: #bce0ed;
-  text-decoration: none;
+.lookout-history {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.lookout-history th,
+.lookout-history td {
+  padding: 7px 8px;
+  text-align: left;
+}
+.lookout-history td {
+  border-top: 1px solid #2b3647;
+}
+.lookout-history th:last-child,
+.lookout-history td:last-child {
+  text-align: right;
 }
 .lookout-plan {
   border-top: 1px solid #2b3647;
-  margin-top: 18px;
-  padding-top: 16px;
+  margin-top: 12px;
+  padding-top: 4px;
 }
 .lookout-plan p {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  line-height: 1.6;
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 6px 0;
+}
+@media (max-width: 600px) {
+  .lookout-row {
+    grid-template-columns: 1fr 28px 16px;
+    gap: 6px;
+    padding: 10px;
+  }
+  .lookout-summary {
+    grid-column: 1;
+    grid-row: 2;
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+  .lookout-count {
+    grid-column: 2;
+    grid-row: 1 / 3;
+  }
+  .lookout-row > span:last-child {
+    grid-column: 3;
+    grid-row: 1 / 3;
+  }
+  .lookout-details {
+    padding: 6px 10px 10px;
+  }
+  .lookout-history th,
+  .lookout-history td {
+    padding: 6px 4px;
+  }
 }

@@ -1,10 +1,6 @@
-# Watchlist Lookout Alerts V1
+# Watchlist Lookout Alerts V2
 
 **IMPLEMENTED in application code; not deployed.** A Watchlist Lookout Alert is an attention notification, not a trade recommendation. LONG LOOKOUT and SHORT LOOKOUT preserve literal price instructions; neither means BUY or SELL.
-
-![Lookout Alerts UI using synthetic browser-test fixtures, not production alerts](images/watchlist-lookout-alerts.png)
-
-The screenshot's CBRS alert is synthetic test data, not evidence of an October 5 production crossing.
 
 ```text
 uploaded watchlist → structured levels + original Game Plan
@@ -50,7 +46,30 @@ Prices remain sampled closes from the existing provider fetch, not tick-exact to
 
 The display DTO includes ID, symbol, observation timestamp, trading date, level type/direction, supplied price level, observed price, structured Game Plan and supplied support/resistance pivots. It omits raw notes, source upload/row identity, bounding boxes, provider/debug objects, previous prices, strategy versions and thresholds. Original Game Plan and pivots are explicitly authorized trader-facing context. Public dashboard recent alerts now show only today's lookouts. Primary Alerts excludes FORMING; FORMING remains persisted for research/Lab, with existing historical chart compatibility retained. All GETs are presentation-only and never arm monitors or create events.
 
-The Alerts page has a date picker, All/Long/Short/Levels filters, newest-first alert cards, ET times, symbol links, level semantics, observed price, source pivots and Game Plan. It polls the selected date's unfiltered All batch every 15 seconds after the prior request finishes, with a 20-second timeout; display filtering therefore never resets sound tracking. Existing dashboard polling remains 15 seconds. Load older alerts is silent. Following Today advances at New York midnight and establishes a fresh silent baseline. Selecting an earlier date stays on that date.
+### Grouped Alerts V2 (implemented, not deployed)
+
+Grouping is presentation only, keyed by `trading_date + symbol`. All/Long/Short/Levels filters apply before grouping, counting and rendering history; LEVEL includes No-Go as well as Support and Resistance. FORMING and records from other dates are excluded. Counts deduplicate persisted IDs (including numeric/string representations); polling cycles do not create events. Groups and history sort by observation timestamp descending, with persisted ID as a tie-breaker.
+
+Each collapsed stock button shows symbol, latest trigger type and actual level, ET time, a neutral count badge and chevron. Native buttons support Enter/Space and `aria-expanded`/`aria-controls`. Only one section opens at a time. It contains Time, Trigger and Observed price columns with tabular numerals, followed by one unchanged original Game Plan. Missing prices/levels/timestamps use `—`; missing plans show a subdued unavailable message. The latest available persisted original plan is used when the latest event lacks one. No plan is rewritten, inferred or combined. Pivot repetition and large individual cards are removed. Mobile rows wrap the summary and allow controlled table scrolling.
+
+Initial date loading follows the existing API's 200-event ID cursor to completion before publishing counts. Each cycle is capped at 20 pages (up to 4,000 events) and the existing 20-second timeout. Partial cycles are discarded. Exceeding limits, invalid cursors or API errors show an explicit complete-history error; prior complete results remain visible with a stale-count warning. Very large dates require a future read-only aggregate approach; no API or schema changes were made here.
+
+Subsequent polls fetch the newest page and continue only until encountering cached persisted history or the end. This relies on the existing immutable persisted alert model and descending ID cursor; it avoids repeatedly fetching the entire historical date. A live burst spanning multiple pages is fetched completely. Polls run 15 seconds after completion; no overlapping polling or WebSockets are added. All categories are fetched so display filters never change sound tracking. Filter/date selections persist, expansion survives refresh and reordering, and it clears when its group disappears. Date changes clear prior-date history. Background refresh never blanks loaded history. Following Today advances at New York midnight with a silent baseline; selecting a past date stays on that date.
+
+`lookoutSound.js`, audio generation, unlock and preference behavior are unchanged. Notification detection runs on newly fetched persisted events before presentation grouping, once per successful new live batch. Initial pagination, older cached history, filters and historical browsing stay silent.
+
+V2 verification: all **24 public frontend Playwright tests passed** in a serial run, including distinct IDs, grouping/order, category/date filters, accordion keyboard operation, missing fields, refresh/expansion, multi-page live bursts, pagination limits, sound regressions and mobile overflow. Production frontend build, Prettier and `git diff --check` passed. No standalone lint script exists in the frontend package. Synthetic desktop/mobile screenshots are generated in ignored `frontend/test-results/`; they are not production-market evidence. Backend tests were not rerun because backend code and schema are unchanged.
+
+V2 requires only the frontend release. No migrations, scanner/engine changes, strategy changes or new public metadata are involved. Frozen FORMING remains `experimental-forming-v1/b067b3150de3`.
+
+For the existing local Compose installation, deployment instructions only:
+
+```sh
+docker compose build frontend
+docker compose up -d --no-deps frontend
+```
+
+Then open Alerts, verify a known date/category against persisted history, expand a stock, check its original plan and verify Sound Off/On using normal live events. Do not inject events into production. Rollback uses the previous frontend image. Production release uses the existing immutable frontend image/operator workflow in [deployment](deployment.md); exact cluster commands belong to the separate deployment repository and are not supplied or executed here. Earlier V1 migration instructions below are historical, not required for V2.
 
 ## Optional sound
 
